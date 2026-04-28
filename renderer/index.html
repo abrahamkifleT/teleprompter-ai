@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Teleprompter</title>
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- MediaPipe Face Mesh (for eye gaze correction) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CLICK-THROUGH INDICATOR (shown when mouse passthrough is on)
+═══════════════════════════════════════════════════════════════ -->
+<div id="click-through-banner" class="click-through-indicator hidden">
+  👻 GHOST MODE — Ctrl+Shift+T to toggle
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TITLE BAR (drag region)
+═══════════════════════════════════════════════════════════════ -->
+<div id="titlebar" class="titlebar">
+  <div class="titlebar-drag">
+    <span class="app-icon">🎬</span>
+    <span class="app-title">AI Teleprompter</span>
+    <span id="status-badge" class="badge badge-idle">IDLE</span>
+  </div>
+  <div class="titlebar-buttons">
+    <button class="tb-btn" id="btn-settings" title="Settings (Ctrl+,)">⚙</button>
+    <button class="tb-btn" id="btn-camera-preview" title="Toggle Camera Preview (Ctrl+G)">👁</button>
+    <button class="tb-btn" id="btn-minimize" title="Minimize">—</button>
+    <button class="tb-btn btn-close" id="btn-close" title="Close">✕</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     TELEPROMPTER PANEL
+═══════════════════════════════════════════════════════════════ -->
+<div id="teleprompter-panel" class="panel">
+  <div id="teleprompter-container">
+    <div id="teleprompter-text" contenteditable="false">
+      <p>Welcome to <strong>AI Teleprompter</strong>.</p>
+      <p>Click ✏️ below to type or paste your script here.</p>
+      <p>Press <kbd>F2</kbd> or click <kbd>🎤 LISTEN</kbd> to capture an interviewer's question — AI will answer it and display the response right here for you to read naturally.</p>
+      <p>Use <kbd>Space</kbd> to auto-scroll, <kbd>+ −</kbd> for speed, <kbd>A+ A−</kbd> for font size.</p>
+      <p>This window is <strong>invisible</strong> to Zoom, Google Meet, Loom, and all screen recording tools.</p>
+      <p>Press <kbd>?</kbd> to see all keyboard shortcuts.</p>
+    </div>
+  </div>
+  <div class="scroll-indicator-top" id="scroll-top"></div>
+  <div class="scroll-indicator-bottom" id="scroll-bottom"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     AI ANSWER PANEL (compact bottom panel)
+═══════════════════════════════════════════════════════════════ -->
+<div id="ai-panel" class="panel ai-panel hidden">
+  <div class="ai-header">
+    <span class="ai-icon">🤖</span>
+    <span class="ai-title">AI Answer</span>
+    <span id="ai-listening-badge" class="badge badge-listening hidden">🎤 LISTENING</span>
+    <span id="ai-thinking-badge" class="badge badge-thinking hidden">💭 THINKING</span>
+    <button class="tb-btn" id="btn-clear-ai" title="Clear">✕</button>
+  </div>
+  <div id="ai-question" class="ai-question hidden"></div>
+  <div id="ai-answer" class="ai-answer">Press <kbd>F2</kbd> to capture a question...</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CAMERA / GAZE CORRECTION PANEL
+═══════════════════════════════════════════════════════════════ -->
+<div id="camera-panel" class="panel camera-panel hidden">
+  <div class="camera-header">
+    <span>📷 Gaze Correction <span class="hint">→ OBS Virtual Camera</span></span>
+    <div class="camera-controls">
+      <label class="toggle-label">
+        <input type="checkbox" id="gaze-toggle" /> Correct
+      </label>
+      <button class="tb-btn" id="btn-open-camera-browser" title="Open in browser for OBS">🔗</button>
+    </div>
+  </div>
+  <!-- Hidden source video -->
+  <video id="source-video" autoplay playsinline muted style="display:none"></video>
+  <!-- Corrected output canvas -->
+  <canvas id="gaze-canvas" width="320" height="240"></canvas>
+  <div class="camera-hint">
+    OBS: Add <em>Browser Source</em> → <code>http://localhost:8765</code> → Start Virtual Camera
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     CONTROL BAR
+═══════════════════════════════════════════════════════════════ -->
+<div id="control-bar" class="control-bar">
+  <!-- Scroll controls -->
+  <div class="ctrl-group">
+    <button class="ctrl-btn" id="btn-scroll-up" title="↑ Scroll Up">↑</button>
+    <button class="ctrl-btn" id="btn-autoscroll" title="Space: Play/Pause">▶</button>
+    <button class="ctrl-btn" id="btn-scroll-down" title="↓ Scroll Down">↓</button>
+  </div>
+
+  <!-- Speed -->
+  <div class="ctrl-group speed-group">
+    <button class="ctrl-btn" id="btn-speed-down" title="- Slower">−</button>
+    <span id="speed-label" class="speed-label">1.0×</span>
+    <button class="ctrl-btn" id="btn-speed-up" title="+ Faster">+</button>
+  </div>
+
+  <!-- Font size -->
+  <div class="ctrl-group">
+    <button class="ctrl-btn" id="btn-font-down" title="Smaller">A-</button>
+    <button class="ctrl-btn" id="btn-font-up" title="Larger">A+</button>
+  </div>
+
+  <!-- Edit & Reset -->
+  <div class="ctrl-group">
+    <button class="ctrl-btn" id="btn-edit" title="Edit script">✏️</button>
+    <button class="ctrl-btn" id="btn-reset" title="Reset scroll">⏮</button>
+  </div>
+
+  <!-- Listen -->
+  <button class="ctrl-btn ctrl-btn-listen" id="btn-listen" title="F2: Listen for question">
+    🎤 LISTEN
+  </button>
+
+  <!-- Opacity -->
+  <div class="ctrl-group opacity-group">
+    <input type="range" id="opacity-slider" min="20" max="100" value="92" title="Opacity" />
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     HOTKEY HINT OVERLAY
+═══════════════════════════════════════════════════════════════ -->
+<div id="hotkey-hint" class="hotkey-hint hidden">
+  <div class="hk-row"><kbd>F2</kbd> Listen for question (global)</div>
+  <div class="hk-row"><kbd>F3</kbd> Hide / show teleprompter (global)</div>
+  <div class="hk-row"><kbd>Space</kbd> Auto-scroll play/pause</div>
+  <div class="hk-row"><kbd>↑ ↓</kbd> Manual scroll</div>
+  <div class="hk-row"><kbd>+ −</kbd> Scroll speed</div>
+  <div class="hk-row"><kbd>[ ]</kbd> Font size</div>
+  <div class="hk-row"><kbd>L</kbd> Listen (in-app)</div>
+  <div class="hk-row"><kbd>Esc</kbd> Stop / clear AI</div>
+  <div class="hk-row"><kbd>Ctrl+Shift+T</kbd> Ghost mode (click-through)</div>
+  <div class="hk-row"><kbd>Ctrl+Shift+O</kbd> Toggle opacity</div>
+  <div class="hk-row"><kbd>Ctrl+G</kbd> Toggle camera</div>
+  <div class="hk-row"><kbd>Ctrl+,</kbd> Settings</div>
+  <div class="hk-row"><kbd>?</kbd> Toggle this help</div>
+</div>
+
+<!-- Hidden canvas for frame extraction -->
+<canvas id="frame-canvas" style="display:none" width="640" height="480"></canvas>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
