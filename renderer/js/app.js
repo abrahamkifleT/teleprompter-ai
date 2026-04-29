@@ -237,7 +237,8 @@ async function autoStartGazeCorrection() {
     await gaze.initCamera();
     gaze.setCorrection(true);
     gazeToggle.checked = true;
-    state.showCamera = true;
+    // NOTE: do NOT set state.showCamera here — the panel stays hidden until
+    // the user explicitly opens it with Ctrl+G or the camera button.
     console.log('[GazeCorrector] Auto-started — eye contact correction active');
   } catch (err) {
     console.warn('[GazeCorrector] Auto-start failed:', err.message);
