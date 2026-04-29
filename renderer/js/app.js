@@ -40,40 +40,42 @@ const aiService = new AIService();
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const statusBadge       = $('status-badge');
-const aiPanel           = $('ai-panel');
-const aiAnswer          = $('ai-answer');
-const aiQuestion        = $('ai-question');
-const aiListeningBadge  = $('ai-listening-badge');
-const aiThinkingBadge   = $('ai-thinking-badge');
-const cameraPanel       = $('camera-panel');
-const hotkeyHint        = $('hotkey-hint');
-const btnAutoscroll     = $('btn-autoscroll');
-const btnListen         = $('btn-listen');
-const speedLabel        = $('speed-label');
-const btnCameraPreview  = $('btn-camera-preview');
-const gazeToggle        = $('gaze-toggle');
+const statusBadge = $('status-badge');
+const aiPanel = $('ai-panel');
+const aiAnswer = $('ai-answer');
+const aiQuestion = $('ai-question');
+const aiListeningBadge = $('ai-listening-badge');
+const aiThinkingBadge = $('ai-thinking-badge');
+const cameraPanel = $('camera-panel');
+const hotkeyHint = $('hotkey-hint');
+const btnAutoscroll = $('btn-autoscroll');
+const btnListen = $('btn-listen');
+const speedLabel = $('speed-label');
+const btnCameraPreview = $('btn-camera-preview');
+const gazeToggle = $('gaze-toggle');
 const clickThroughBanner = $('click-through-banner');
 
 // ─── Load persisted settings ──────────────────────────────────────────────
 async function loadSettings() {
   const settings = await api.storeGetAll();
-  state.apiKey       = settings.apiKey || '';
-  state.model        = settings.model || 'gpt-4o';
+  state.apiKey = settings.apiKey || '';
+  state.model = settings.model || 'gpt-4o';
   state.systemPrompt = settings.systemPrompt || state.systemPrompt;
 
   const savedScript = settings.script;
-  if (savedScript) {
-    $('teleprompter-text').innerHTML = savedScript;
-  }
+  if (savedScript) $('teleprompter-text').innerHTML = savedScript;
 
-  const savedSpeed = settings.scrollSpeed;
-  if (savedSpeed) teleprompter.setSpeed(savedSpeed);
-
-  const savedFontSize = settings.fontSize;
-  if (savedFontSize) teleprompter.setFontSize(savedFontSize);
-
+  if (settings.scrollSpeed) teleprompter.setSpeed(settings.scrollSpeed);
+  if (settings.fontSize) teleprompter.setFontSize(settings.fontSize);
   if (settings.silenceMs) speech.setSilenceTimeout(settings.silenceMs);
+
+  // ── Apply gaze settings to the corrector ─────────────────────────────
+  // (These were saved but never applied to the GazeCorrector before)
+  if (settings.gazeStrength !== undefined) gaze.setCorrectionStrength(settings.gazeStrength / 100);
+  if (settings.cameraOffsetY !== undefined) gaze.setCameraOffsetY(settings.cameraOffsetY);
+
+  // Pass the API key to the speech module so Whisper can use it
+  speech.setApiKey(state.apiKey);
 
   updateSpeedLabel();
 }
@@ -113,12 +115,9 @@ async function answerQuestion(question) {
   let buffer = '';
   api.onStreamChunk((chunk) => {
     buffer += chunk;
-    // Update both the AI panel and the teleprompter
     aiAnswer.textContent = buffer;
     aiAnswer.scrollTop = aiAnswer.scrollHeight;
-    if (streamEl) {
-      streamEl.textContent = buffer;
-    }
+    if (streamEl) streamEl.textContent = buffer;
   });
 
   api.onStreamDone((fullContent) => {
@@ -126,8 +125,6 @@ async function answerQuestion(question) {
     if (streamEl) streamEl.classList.remove('typing-cursor');
     aiThinkingBadge.classList.add('hidden');
     setStatus('READY', 'ready');
-
-    // Add to conversation history
     aiService.addToHistory(question, fullContent);
   });
 
@@ -164,38 +161,43 @@ function clearAI() {
 function startListening() {
   if (state.isListening) return;
   state.isListening = true;
+
   btnListen.classList.add('active');
-  btnListen.innerHTML = '🔴 LISTENING...';
+  btnListen.innerHTML = '🔴 LISTENING…';
   aiPanel.classList.remove('hidden');
-  aiAnswer.textContent = 'Listening for question...';
+  aiAnswer.textContent = '🎙 Listening — speak your question…';
   aiQuestion.classList.add('hidden');
   aiListeningBadge.classList.remove('hidden');
   setStatus('LISTENING', 'listening');
 
+  // ── Always pass the current API key before starting ───────────────────
+  speech.setApiKey(state.apiKey);
+
   speech.start(
+    // interim: live progress messages
     (transcript) => {
-      // Interim — show live transcription
-      aiAnswer.textContent = `🎤 "${transcript}"`;
+      aiAnswer.textContent = transcript;
     },
+    // final: transcript ready → send to GPT
     async (finalTranscript) => {
-      // Final — send to AI
-      stopListening();
+      stopListening(false); // don't re-stop speech module (already stopped)
       await answerQuestion(finalTranscript);
     },
+    // error
     (err) => {
-      stopListening();
-      showNotification(`❌ Speech error: ${err}`);
+      stopListening(false);
+      showNotification(`❌ ${err}`);
     }
   );
 }
 
-function stopListening() {
+function stopListening(alsoStopSpeech = true) {
   if (!state.isListening) return;
   state.isListening = false;
   btnListen.classList.remove('active');
   btnListen.innerHTML = '🎤 LISTEN';
   aiListeningBadge.classList.add('hidden');
-  speech.stop();
+  if (alsoStopSpeech) speech.stop();
 }
 
 function toggleListening() {
@@ -209,45 +211,41 @@ async function toggleCameraPanel() {
   if (state.showCamera) {
     cameraPanel.classList.remove('hidden');
     btnCameraPreview.style.color = 'var(--accent)';
-    await gaze.initCamera();
-    // Auto-enable gaze correction
-    gaze.setCorrection(true);
-    gazeToggle.checked = true;
+    try {
+      await gaze.initCamera();
+      gaze.setCorrection(true);
+      gazeToggle.checked = true;
+    } catch (err) {
+      console.error('[Camera] init failed:', err);
+    }
   } else {
     cameraPanel.classList.add('hidden');
     btnCameraPreview.style.color = '';
     gaze.stopCamera();
+    gazeToggle.checked = false;
   }
 }
 
-// Start gaze correction automatically on launch
+/** Auto-start gaze correction silently on launch (panel stays hidden) */
 async function autoStartGazeCorrection() {
   try {
     await gaze.initCamera();
     gaze.setCorrection(true);
     gazeToggle.checked = true;
     state.showCamera = true;
-    // Keep camera panel hidden by default — gaze correction runs in background
-    // User can press Ctrl+G to see the preview
     console.log('[GazeCorrector] Auto-started — eye contact correction active');
   } catch (err) {
-    console.warn('[GazeCorrector] Auto-start failed:', err);
+    console.warn('[GazeCorrector] Auto-start failed:', err.message);
   }
 }
 
 // ─── Global Shortcuts from Main Process ──────────────────────────────────
-api.onGlobalToggleListen(() => {
-  toggleListening();
-});
+api.onGlobalToggleListen(() => toggleListening());
 
 api.onGlobalClickThroughChanged((isGhost) => {
   state.isClickThrough = isGhost;
   clickThroughBanner.classList.toggle('hidden', !isGhost);
-  if (isGhost) {
-    setStatus('GHOST', 'ghost');
-  } else {
-    setStatus('IDLE', 'idle');
-  }
+  setStatus(isGhost ? 'GHOST' : 'IDLE', isGhost ? 'ghost' : 'idle');
 });
 
 api.onGlobalToggleOpacity(() => {
@@ -259,15 +257,12 @@ api.onGlobalToggleOpacity(() => {
 
 // ─── Keyboard Shortcuts ───────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  // Don't capture keys when editing the teleprompter text
-  if ($('teleprompter-text').contentEditable === 'true' && !e.ctrlKey && !e.metaKey) {
-    return;
-  }
+  // Don't steal keys while editing the teleprompter text
+  if ($('teleprompter-text').contentEditable === 'true' && !e.ctrlKey && !e.metaKey) return;
 
   const key = e.key.toLowerCase();
   const ctrl = e.ctrlKey || e.metaKey;
 
-  // Ctrl combos
   if (ctrl) {
     if (key === ',') { e.preventDefault(); api.openSettings(); return; }
     if (key === 'g') { e.preventDefault(); toggleCameraPanel(); return; }
@@ -280,55 +275,49 @@ document.addEventListener('keydown', (e) => {
       teleprompter.toggleScroll();
       btnAutoscroll.classList.toggle('active', teleprompter.isScrolling);
       btnAutoscroll.textContent = teleprompter.isScrolling ? '⏸' : '▶';
-      setStatus(teleprompter.isScrolling ? 'SCROLLING' : 'IDLE', teleprompter.isScrolling ? 'scrolling' : 'idle');
+      setStatus(
+        teleprompter.isScrolling ? 'SCROLLING' : 'IDLE',
+        teleprompter.isScrolling ? 'scrolling' : 'idle'
+      );
       break;
-
     case 'ArrowUp':
       e.preventDefault();
       teleprompter.scrollBy(-80);
       break;
-
     case 'ArrowDown':
       e.preventDefault();
       teleprompter.scrollBy(80);
       break;
-
     case '+': case '=':
       e.preventDefault();
       teleprompter.changeSpeed(0.1);
       updateSpeedLabel();
       api.storeSet('scrollSpeed', teleprompter.speed);
       break;
-
     case '-': case '_':
       e.preventDefault();
       teleprompter.changeSpeed(-0.1);
       updateSpeedLabel();
       api.storeSet('scrollSpeed', teleprompter.speed);
       break;
-
     case '[':
       e.preventDefault();
       teleprompter.changeFontSize(-2);
       api.storeSet('fontSize', teleprompter.fontSize);
       break;
-
     case ']':
       e.preventDefault();
       teleprompter.changeFontSize(2);
       api.storeSet('fontSize', teleprompter.fontSize);
       break;
-
     case 'l': case 'L':
       e.preventDefault();
       toggleListening();
       break;
-
     case 'Escape':
       stopListening();
       clearAI();
       break;
-
     case '?':
       e.preventDefault();
       state.showHelp = !state.showHelp;
@@ -338,7 +327,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ─── Button Listeners ─────────────────────────────────────────────────────
-$('btn-close').addEventListener('click',    () => api.close());
+$('btn-close').addEventListener('click', () => api.close());
 $('btn-minimize').addEventListener('click', () => api.minimize());
 $('btn-settings').addEventListener('click', () => api.openSettings());
 $('btn-camera-preview').addEventListener('click', toggleCameraPanel);
@@ -349,7 +338,7 @@ $('btn-autoscroll').addEventListener('click', () => {
   btnAutoscroll.textContent = teleprompter.isScrolling ? '⏸' : '▶';
 });
 
-$('btn-scroll-up').addEventListener('click',   () => teleprompter.scrollBy(-80));
+$('btn-scroll-up').addEventListener('click', () => teleprompter.scrollBy(-80));
 $('btn-scroll-down').addEventListener('click', () => teleprompter.scrollBy(80));
 
 $('btn-speed-up').addEventListener('click', () => {
@@ -363,7 +352,7 @@ $('btn-speed-down').addEventListener('click', () => {
   api.storeSet('scrollSpeed', teleprompter.speed);
 });
 
-$('btn-font-up').addEventListener('click',   () => { teleprompter.changeFontSize(2); api.storeSet('fontSize', teleprompter.fontSize); });
+$('btn-font-up').addEventListener('click', () => { teleprompter.changeFontSize(2); api.storeSet('fontSize', teleprompter.fontSize); });
 $('btn-font-down').addEventListener('click', () => { teleprompter.changeFontSize(-2); api.storeSet('fontSize', teleprompter.fontSize); });
 
 $('btn-reset').addEventListener('click', () => teleprompter.resetScroll());
@@ -408,13 +397,19 @@ setStatus('IDLE', 'idle');
 // Auto-start gaze correction for real-time eye contact fix
 autoStartGazeCorrection();
 
-// Listen for settings updates from settings window
+// ── Settings update from Settings window ──────────────────────────────────
 window.addEventListener('message', (event) => {
-  if (event.data?.type === 'settings-saved') {
-    const s = event.data.settings;
-    state.apiKey       = s.apiKey;
-    state.model        = s.model;
-    state.systemPrompt = s.systemPrompt;
-    if (s.silenceMs) speech.setSilenceTimeout(s.silenceMs);
-  }
+  if (event.data?.type !== 'settings-saved') return;
+  const s = event.data.settings;
+
+  state.apiKey = s.apiKey || state.apiKey;
+  state.model = s.model || state.model;
+  state.systemPrompt = s.systemPrompt || state.systemPrompt;
+
+  if (s.silenceMs) speech.setSilenceTimeout(s.silenceMs);
+  speech.setApiKey(state.apiKey); // keep speech module in sync
+
+  // Apply updated gaze parameters immediately (no restart needed)
+  if (s.gazeStrength !== undefined) gaze.setCorrectionStrength(s.gazeStrength / 100);
+  if (s.cameraOffsetY !== undefined) gaze.setCameraOffsetY(s.cameraOffsetY);
 });
