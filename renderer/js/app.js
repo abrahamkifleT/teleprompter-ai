@@ -217,6 +217,11 @@ async function toggleCameraPanel() {
       gazeToggle.checked = true;
     } catch (err) {
       console.error('[Camera] init failed:', err);
+      // revert UI state so panel stays hidden
+      state.showCamera = false;
+      cameraPanel.classList.add('hidden');
+      btnCameraPreview.style.color = '';
+      showNotification('⚠️ Camera could not be started. Check permissions and ensure a webcam is connected.');
     }
   } else {
     cameraPanel.classList.add('hidden');
