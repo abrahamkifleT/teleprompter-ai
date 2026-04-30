@@ -70,10 +70,12 @@ async function loadSettings() {
   if (settings.silenceMs) speech.setSilenceTimeout(settings.silenceMs);
 
   // ── Apply gaze settings to the corrector ───────────────────────────────────────
-  // Use strong defaults for top-mounted camera setup if nothing saved yet.
-  // gazeStrength: 88%  |  cameraOffsetY: -45 (big upward iris shift)
-  const gazeStrength  = settings.gazeStrength  !== undefined ? settings.gazeStrength  : 88;
-  const camOffsetY    = settings.cameraOffsetY !== undefined ? settings.cameraOffsetY : -45;
+  // Force strong defaults for top-mounted camera. If old weak values were
+  // saved (gazeStrength < 80 or cameraOffsetY > -25), upgrade them silently.
+  const savedStrength = settings.gazeStrength;
+  const savedOffset   = settings.cameraOffsetY;
+  const gazeStrength  = (!savedStrength || savedStrength < 80)  ? 88  : savedStrength;
+  const camOffsetY    = (!savedOffset   || savedOffset   > -25) ? -45 : savedOffset;
   gaze.setCorrectionStrength(gazeStrength / 100);
   gaze.setCameraOffsetY(camOffsetY);
 

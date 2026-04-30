@@ -207,57 +207,84 @@ export class GazeCorrector {
     return { cx, cy, radius: totalR / spec.boundary.length };
   }
 
+  /**
+   * Returns the eye-socket bounding ellipse (halfW / halfH) from landmarks.
+   * This defines the full eye area that will be warped — much larger than
+   * the iris alone, covering the whites and eyelids too.
+   */
+  _getEyeBox(lm, indices, w, h) {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    for (const i of indices) {
+      const x = lm[i].x * w, y = lm[i].y * h;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    return {
+      cx:    (minX + maxX) / 2,
+      cy:    (minY + maxY) / 2,
+      halfW: (maxX - minX) / 2 * 1.5,  // covers full eye white + lash line
+      halfH: (maxY - minY) / 2 * 2.4,  // tall: upper + lower eyelid skin
+    };
+  }
+
   _applyGazeCorrection(ctx, lm, w, h) {
     const str = this.correctionStrength;
-    const blend = this.blendFactor;
 
     // ── Left eye ────────────────────────────────────────────────────────
-    const li = this._getIrisInfo(lm, this.LEFT_IRIS, w, h);
-    const lc = this._getEyeCenter(lm, this.LEFT_EYE, w, h);
-
-    // Camera offset: shift the target upward (negative cameraOffsetY moves up)
-    // Multiplier of 3× iris-radius gives perceptually natural shift range
+    const li   = this._getIrisInfo(lm, this.LEFT_IRIS, w, h);
+    const lbox = this._getEyeBox(lm, this.LEFT_EYE, w, h);
+    // Target = eye-socket centre shifted upward toward the camera lens
     const lcTarget = {
-      x: lc.x,
-      y: lc.y + this.cameraOffsetY * li.radius * 3,
+      x: lbox.cx,
+      y: lbox.cy + this.cameraOffsetY * li.radius * 4,
     };
-    this._warpIris(ctx, li, lcTarget, w, h, str, blend);
+    this._warpEye(ctx, li, lbox, lcTarget, w, h, str);
 
     // ── Right eye ───────────────────────────────────────────────────────
-    const ri = this._getIrisInfo(lm, this.RIGHT_IRIS, w, h);
-    const rc = this._getEyeCenter(lm, this.RIGHT_EYE, w, h);
+    const ri   = this._getIrisInfo(lm, this.RIGHT_IRIS, w, h);
+    const rbox = this._getEyeBox(lm, this.RIGHT_EYE, w, h);
     const rcTarget = {
-      x: rc.x,
-      y: rc.y + this.cameraOffsetY * ri.radius * 3,
+      x: rbox.cx,
+      y: rbox.cy + this.cameraOffsetY * ri.radius * 4,
     };
-    this._warpIris(ctx, ri, rcTarget, w, h, str, blend);
+    this._warpEye(ctx, ri, rbox, rcTarget, w, h, str);
   }
 
   /**
-   * Liquify-style warp — reads an EXPANDED patch that covers both the current
-   * iris position and the target position so the inverse-mapping never clamps
-   * to an edge pixel when the correction displacement is large.
+   * CapCut-style full-eye warp.
+   *
+   * Warps the ENTIRE eye region — iris + sclera (whites) + eyelids — as
+   * one unit so the output looks like a genuine gaze rotation, not just
+   * a nudged iris dot.
+   *
+   * Key differences from the old _warpIris:
+   *   • Warp zone  = eye-socket ellipse (~halfW 35-40px) not iris circle (~15px)
+   *   • Falloff    = elliptical (matches the actual eye shape)
+   *   • Patch size = covers source + destination so inverse-map never clamps
    */
-  _warpIris(ctx, iris, eyeCenter, w, h, str, blend) {
-    const dx = (eyeCenter.x - iris.cx) * str;
-    const dy = (eyeCenter.y - iris.cy) * str;
+  _warpEye(ctx, iris, eyeBox, target, w, h, str) {
+    const dx = (target.x - iris.cx) * str;
+    const dy = (target.y - iris.cy) * str;
 
     if (Math.hypot(dx, dy) < 0.5) return;
 
-    const r      = iris.radius;
-    const outerR = r * (1 + blend);
-    const margin = Math.ceil(outerR + 2);
+    const { halfW, halfH } = eyeBox;
 
-    // ── Expand patch to cover BOTH current iris position AND target position ──
-    // This ensures the inverse-mapped source coordinates always land inside
-    // the patch, preventing the "sample-from-edge" clamp bug.
-    const targetX = iris.cx + dx;
-    const targetY = iris.cy + dy;
+    // ── KEY FIX: center the warp at the IRIS, not the eye socket ──
+    // This ensures wf = 1.0 exactly at the iris (full displacement),
+    // and fades to 0 at the socket edge. The old socket-centered approach
+    // gave the iris only ~80% displacement when looking down.
+    const wcx = iris.cx;
+    const wcy = iris.cy;
 
-    const x0 = Math.max(0, Math.floor(Math.min(iris.cx, targetX) - margin));
-    const y0 = Math.max(0, Math.floor(Math.min(iris.cy, targetY) - margin));
-    const x1 = Math.min(w, Math.ceil(Math.max(iris.cx, targetX) + margin));
-    const y1 = Math.min(h, Math.ceil(Math.max(iris.cy, targetY) + margin));
+    const pad    = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))) + 4;
+    const margin = Math.ceil(Math.max(halfW, halfH)) + pad;
+
+    const x0 = Math.max(0, Math.floor(wcx - margin));
+    const y0 = Math.max(0, Math.floor(wcy - margin));
+    const x1 = Math.min(w, Math.ceil(wcx + margin));
+    const y1 = Math.min(h, Math.ceil(wcy + margin));
     const pw = x1 - x0;
     const ph = y1 - y0;
     if (pw <= 0 || ph <= 0) return;
@@ -267,38 +294,25 @@ export class GazeCorrector {
 
     for (let py = 0; py < ph; py++) {
       for (let px = 0; px < pw; px++) {
-        // Canvas-space coords of this patch pixel
         const canvasX = x0 + px;
         const canvasY = y0 + py;
 
-        // Distance from CURRENT iris centre → used for warp-weight falloff
-        const ex   = canvasX - iris.cx;
-        const ey   = canvasY - iris.cy;
-        const dist = Math.sqrt(ex * ex + ey * ey);
-
-        let wf = 0;
-        if (dist <= r) {
-          wf = 1;
-        } else if (dist <= outerR) {
-          const t = (dist - r) / (outerR - r);
-          wf = 1 - t * t * (3 - 2 * t); // smoothstep
-        }
+        // Elliptical distance from IRIS CENTER (0=iris, 1=socket edge, >1=outside)
+        const ex    = (canvasX - wcx) / halfW;
+        const ey    = (canvasY - wcy) / halfH;
+        const eDist = Math.sqrt(ex * ex + ey * ey);
 
         const di = (py * pw + px) * 4;
 
-        if (wf > 0) {
-          // Inverse-map: where did this destination pixel come from?
-          // Convert canvas-space source coords → patch-space
-          const srcCanvasX = canvasX - dx * wf;
-          const srcCanvasY = canvasY - dy * wf;
-          const spx = srcCanvasX - x0;
-          const spy = srcCanvasY - y0;
+        if (eDist < 1.0) {
+          // Smoothstep: wf=1.0 at iris center, 0 at socket rim
+          const wf   = 1.0 - eDist * eDist * (3.0 - 2.0 * eDist);
+          const srcX = (canvasX - dx * wf) - x0;
+          const srcY = (canvasY - dy * wf) - y0;
 
-          // Clamp (should almost never fire now that patch is expanded)
-          const sx = Math.max(0, Math.min(pw - 1.001, spx));
-          const sy = Math.max(0, Math.min(ph - 1.001, spy));
+          const sx = Math.max(0, Math.min(pw - 1.001, srcX));
+          const sy = Math.max(0, Math.min(ph - 1.001, srcY));
 
-          // Bilinear interpolation
           const sx0f = Math.floor(sx), sy0f = Math.floor(sy);
           const sx1f = Math.min(pw - 1, sx0f + 1);
           const sy1f = Math.min(ph - 1, sy0f + 1);
@@ -317,7 +331,6 @@ export class GazeCorrector {
               src.data[i11 + c] * fx       * fy;
           }
         } else {
-          // Outside warp zone — copy original pixel unchanged
           dst.data[di]     = src.data[di];
           dst.data[di + 1] = src.data[di + 1];
           dst.data[di + 2] = src.data[di + 2];
