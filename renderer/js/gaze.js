@@ -234,27 +234,30 @@ export class GazeCorrector {
   }
 
   /**
-   * Liquify-style inverse-mapped warp (same as eyealign_upload.html warpIris).
-   *
-   * For every destination pixel inside the iris region we back-project to
-   * find its source sample, applying a smoothstep falloff so the warp
-   * blends seamlessly with the surrounding skin.
+   * Liquify-style warp — reads an EXPANDED patch that covers both the current
+   * iris position and the target position so the inverse-mapping never clamps
+   * to an edge pixel when the correction displacement is large.
    */
   _warpIris(ctx, iris, eyeCenter, w, h, str, blend) {
     const dx = (eyeCenter.x - iris.cx) * str;
     const dy = (eyeCenter.y - iris.cy) * str;
 
-    if (Math.hypot(dx, dy) < 0.5) return; // nothing to do
+    if (Math.hypot(dx, dy) < 0.5) return;
 
-    const r = iris.radius;
+    const r      = iris.radius;
     const outerR = r * (1 + blend);
     const margin = Math.ceil(outerR + 2);
 
-    // Clamp bounding box to canvas
-    const x0 = Math.max(0, Math.floor(iris.cx - margin));
-    const y0 = Math.max(0, Math.floor(iris.cy - margin));
-    const x1 = Math.min(w, Math.ceil(iris.cx + margin));
-    const y1 = Math.min(h, Math.ceil(iris.cy + margin));
+    // ── Expand patch to cover BOTH current iris position AND target position ──
+    // This ensures the inverse-mapped source coordinates always land inside
+    // the patch, preventing the "sample-from-edge" clamp bug.
+    const targetX = iris.cx + dx;
+    const targetY = iris.cy + dy;
+
+    const x0 = Math.max(0, Math.floor(Math.min(iris.cx, targetX) - margin));
+    const y0 = Math.max(0, Math.floor(Math.min(iris.cy, targetY) - margin));
+    const x1 = Math.min(w, Math.ceil(Math.max(iris.cx, targetX) + margin));
+    const y1 = Math.min(h, Math.ceil(Math.max(iris.cy, targetY) + margin));
     const pw = x1 - x0;
     const ph = y1 - y0;
     if (pw <= 0 || ph <= 0) return;
@@ -264,11 +267,15 @@ export class GazeCorrector {
 
     for (let py = 0; py < ph; py++) {
       for (let px = 0; px < pw; px++) {
-        const ex = (x0 + px) - iris.cx;
-        const ey = (y0 + py) - iris.cy;
+        // Canvas-space coords of this patch pixel
+        const canvasX = x0 + px;
+        const canvasY = y0 + py;
+
+        // Distance from CURRENT iris centre → used for warp-weight falloff
+        const ex   = canvasX - iris.cx;
+        const ey   = canvasY - iris.cy;
         const dist = Math.sqrt(ex * ex + ey * ey);
 
-        // Warp weight: 1 inside iris, smoothstep falloff in blend ring, 0 outside
         let wf = 0;
         if (dist <= r) {
           wf = 1;
@@ -280,31 +287,38 @@ export class GazeCorrector {
         const di = (py * pw + px) * 4;
 
         if (wf > 0) {
-          // Inverse-map: sample from the position BEFORE the warp
-          const sx = Math.max(0, Math.min(pw - 1.001, px - dx * wf));
-          const sy = Math.max(0, Math.min(ph - 1.001, py - dy * wf));
+          // Inverse-map: where did this destination pixel come from?
+          // Convert canvas-space source coords → patch-space
+          const srcCanvasX = canvasX - dx * wf;
+          const srcCanvasY = canvasY - dy * wf;
+          const spx = srcCanvasX - x0;
+          const spy = srcCanvasY - y0;
+
+          // Clamp (should almost never fire now that patch is expanded)
+          const sx = Math.max(0, Math.min(pw - 1.001, spx));
+          const sy = Math.max(0, Math.min(ph - 1.001, spy));
 
           // Bilinear interpolation
-          const sx0 = Math.floor(sx), sy0 = Math.floor(sy);
-          const sx1 = Math.min(pw - 1, sx0 + 1);
-          const sy1 = Math.min(ph - 1, sy0 + 1);
-          const fx = sx - sx0, fy = sy - sy0;
+          const sx0f = Math.floor(sx), sy0f = Math.floor(sy);
+          const sx1f = Math.min(pw - 1, sx0f + 1);
+          const sy1f = Math.min(ph - 1, sy0f + 1);
+          const fx = sx - sx0f, fy = sy - sy0f;
 
-          const i00 = (sy0 * pw + sx0) * 4;
-          const i10 = (sy0 * pw + sx1) * 4;
-          const i01 = (sy1 * pw + sx0) * 4;
-          const i11 = (sy1 * pw + sx1) * 4;
+          const i00 = (sy0f * pw + sx0f) * 4;
+          const i10 = (sy0f * pw + sx1f) * 4;
+          const i01 = (sy1f * pw + sx0f) * 4;
+          const i11 = (sy1f * pw + sx1f) * 4;
 
           for (let c = 0; c < 4; c++) {
             dst.data[di + c] =
               src.data[i00 + c] * (1 - fx) * (1 - fy) +
-              src.data[i10 + c] * fx * (1 - fy) +
-              src.data[i01 + c] * (1 - fx) * fy +
-              src.data[i11 + c] * fx * fy;
+              src.data[i10 + c] * fx       * (1 - fy) +
+              src.data[i01 + c] * (1 - fx) * fy       +
+              src.data[i11 + c] * fx       * fy;
           }
         } else {
-          // Outside warp zone — copy original pixel
-          dst.data[di] = src.data[di];
+          // Outside warp zone — copy original pixel unchanged
+          dst.data[di]     = src.data[di];
           dst.data[di + 1] = src.data[di + 1];
           dst.data[di + 2] = src.data[di + 2];
           dst.data[di + 3] = src.data[di + 3];
