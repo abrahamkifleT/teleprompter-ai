@@ -212,8 +212,8 @@ async function toggleCameraPanel() {
     cameraPanel.classList.remove('hidden');
     btnCameraPreview.style.color = 'var(--accent)';
     try {
-      // If auto-start already initialised the camera, reuse it — don't call
-      // initCamera() again (that would create a duplicate MediaPipe loop).
+      // Always (re)initialize if not running — this ensures a fresh start
+      // even if a previous silent init attempt failed.
       if (!gaze.isRunning) {
         await gaze.initCamera();
       }
@@ -229,25 +229,11 @@ async function toggleCameraPanel() {
   } else {
     cameraPanel.classList.add('hidden');
     btnCameraPreview.style.color = '';
-    // Only fully stop the camera when the panel is closed; correction keeps
-    // running invisibly so it is ready when the user re-opens the panel.
+    // Stop camera fully when panel closes so it can re-initialize cleanly next time
+    gaze.stopCamera();
     gaze.setCorrection(false);
     gazeToggle.checked = false;
     state.showCamera = false;
-  }
-}
-
-/** Auto-start gaze correction silently on launch (panel stays hidden) */
-async function autoStartGazeCorrection() {
-  try {
-    await gaze.initCamera();
-    gaze.setCorrection(true);
-    gazeToggle.checked = true;
-    // NOTE: do NOT set state.showCamera here — the panel stays hidden until
-    // the user explicitly opens it with Ctrl+G or the camera button.
-    console.log('[GazeCorrector] Auto-started — eye contact correction active');
-  } catch (err) {
-    console.warn('[GazeCorrector] Auto-start failed:', err.message);
   }
 }
 
@@ -405,9 +391,7 @@ function updateSpeedLabel() {
 // ─── Init ─────────────────────────────────────────────────────────────────
 loadSettings();
 setStatus('IDLE', 'idle');
-
-// Auto-start gaze correction for real-time eye contact fix
-autoStartGazeCorrection();
+// Camera is started on-demand when user presses Ctrl+G or clicks 👁
 
 // ── Settings update from Settings window ──────────────────────────────────
 window.addEventListener('message', (event) => {
