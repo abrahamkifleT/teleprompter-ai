@@ -224,23 +224,22 @@
     <div class="field">
       <label>Correction Strength</label>
       <div class="slider-row">
-        <input type="range" id="gazeStrength" min="0" max="100" value="65" />
-        <span class="slider-val" id="gazeStrengthVal">65%</span>
+        <input type="range" id="gazeStrength" min="0" max="100" value="88" />
+        <span class="slider-val" id="gazeStrengthVal">88%</span>
       </div>
       <div class="field-hint">
-        How much to redirect your eyes toward the camera.
-        Enable gaze correction from the main window (Ctrl+G), then tick "Correct".
+        How strongly your iris is redirected toward the camera lens. 80–95% works best for most setups.
       </div>
     </div>
 
     <div class="field">
-      <label>Camera Vertical Offset</label>
+      <label>Camera Vertical Offset <span style="color:var(--accent);font-size:10px">↑ camera above screen</span></label>
       <div class="slider-row">
-        <input type="range" id="cameraOffsetY" min="-50" max="0" value="-12" />
-        <span class="slider-val" id="cameraOffsetYVal">-12%</span>
+        <input type="range" id="cameraOffsetY" min="-80" max="0" value="-45" />
+        <span class="slider-val" id="cameraOffsetYVal">-45%</span>
       </div>
       <div class="field-hint">
-        Negative = camera is above the screen (typical). Adjust so corrected eyes look at camera naturally.
+        Drag left (more negative) if your camera is at the <strong>top</strong> of your monitor and you're looking down at your script. Start at −45 and increase until eyes appear to look at the camera.
       </div>
     </div>
 

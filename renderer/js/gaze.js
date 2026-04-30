@@ -25,9 +25,12 @@ export class GazeCorrector {
     this.correctionOn = false;
 
     // Tunable — updated from Settings
-    this.correctionStrength = 0.70; // 0–1
-    this.blendFactor = 0.40; // iris-warp feather width
-    this.cameraOffsetY = -0.15; // -1..0  (negative = camera above screen)
+    // ⚠️ These defaults are tuned for a top-of-monitor camera while the user
+    //    looks DOWN at a teleprompter.  Strength 88% + big upward offset (-0.45)
+    //    gives a clearly visible iris redirect toward the camera lens.
+    this.correctionStrength = 0.88; // 0–1
+    this.blendFactor = 0.30;        // iris-warp feather width (tighter = sharper)
+    this.cameraOffsetY = -0.45;     // -1..0  (negative = camera above screen)
 
     this.frameCount = 0;
 

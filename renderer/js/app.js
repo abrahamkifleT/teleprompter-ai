@@ -69,10 +69,13 @@ async function loadSettings() {
   if (settings.fontSize) teleprompter.setFontSize(settings.fontSize);
   if (settings.silenceMs) speech.setSilenceTimeout(settings.silenceMs);
 
-  // ── Apply gaze settings to the corrector ─────────────────────────────
-  // (These were saved but never applied to the GazeCorrector before)
-  if (settings.gazeStrength !== undefined) gaze.setCorrectionStrength(settings.gazeStrength / 100);
-  if (settings.cameraOffsetY !== undefined) gaze.setCameraOffsetY(settings.cameraOffsetY);
+  // ── Apply gaze settings to the corrector ───────────────────────────────────────
+  // Use strong defaults for top-mounted camera setup if nothing saved yet.
+  // gazeStrength: 88%  |  cameraOffsetY: -45 (big upward iris shift)
+  const gazeStrength  = settings.gazeStrength  !== undefined ? settings.gazeStrength  : 88;
+  const camOffsetY    = settings.cameraOffsetY !== undefined ? settings.cameraOffsetY : -45;
+  gaze.setCorrectionStrength(gazeStrength / 100);
+  gaze.setCameraOffsetY(camOffsetY);
 
   // Pass the API key to the speech module so Whisper can use it
   speech.setApiKey(state.apiKey);
