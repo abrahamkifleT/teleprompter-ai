@@ -212,12 +212,15 @@ async function toggleCameraPanel() {
     cameraPanel.classList.remove('hidden');
     btnCameraPreview.style.color = 'var(--accent)';
     try {
-      await gaze.initCamera();
+      // If auto-start already initialised the camera, reuse it — don't call
+      // initCamera() again (that would create a duplicate MediaPipe loop).
+      if (!gaze.isRunning) {
+        await gaze.initCamera();
+      }
       gaze.setCorrection(true);
       gazeToggle.checked = true;
     } catch (err) {
       console.error('[Camera] init failed:', err);
-      // revert UI state so panel stays hidden
       state.showCamera = false;
       cameraPanel.classList.add('hidden');
       btnCameraPreview.style.color = '';
@@ -226,8 +229,11 @@ async function toggleCameraPanel() {
   } else {
     cameraPanel.classList.add('hidden');
     btnCameraPreview.style.color = '';
-    gaze.stopCamera();
+    // Only fully stop the camera when the panel is closed; correction keeps
+    // running invisibly so it is ready when the user re-opens the panel.
+    gaze.setCorrection(false);
     gazeToggle.checked = false;
+    state.showCamera = false;
   }
 }
 

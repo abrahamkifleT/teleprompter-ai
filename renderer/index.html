@@ -75,8 +75,10 @@
 ═══════════════════════════════════════════════════════════════ -->
 <div id="camera-panel" class="panel camera-panel hidden">
   <div class="camera-header">
-    <span>📷 Gaze Correction <span class="hint">→ OBS Virtual Camera</span></span>
+    <span>📷 Gaze Correction <span class="hint">&rarr; OBS Virtual Camera</span></span>
     <div class="camera-controls">
+      <span id="gaze-status-dot" class="gaze-dot" title="Correction active"></span>
+      <span id="gaze-face-badge" class="gaze-face-badge hidden">👁 FACE DETECTED</span>
       <label class="toggle-label">
         <input type="checkbox" id="gaze-toggle" /> Correct
       </label>
