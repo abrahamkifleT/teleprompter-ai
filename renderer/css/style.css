@@ -343,6 +343,88 @@ body {
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* ─── Live Audio Level Indicator ─────────────────────────────────────────── */
+.audio-level-container {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(248,113,113,0.03);
+  animation: fadeSlideIn 0.3s ease;
+}
+
+.audio-level-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.audio-level-icon {
+  font-size: 13px;
+  animation: pulse-glow 1.2s ease infinite;
+}
+
+.audio-level-label span:nth-child(2) {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+.audio-rms {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.4px;
+}
+
+.audio-level-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.audio-level-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--green) 50%, var(--red) 100%);
+  transition: width 0.1s ease-out;
+  box-shadow: 0 0 8px var(--accent-glow);
+  position: relative;
+}
+
+.audio-level-bar.level-low {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+.audio-level-bar.level-mid {
+  background: linear-gradient(90deg, var(--accent) 0%, var(--green) 100%);
+  box-shadow: 0 0 8px var(--green-glow);
+}
+.audio-level-bar.level-high {
+  background: linear-gradient(90deg, var(--green) 0%, var(--yellow) 60%, var(--red) 100%);
+  box-shadow: 0 0 12px var(--red-glow);
+}
+
+.audio-status-text {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+  transition: color var(--transition);
+}
+.audio-status-text.active {
+  color: var(--green);
+}
+
 /* ─── Camera Panel ───────────────────────────────────────────────────────── */
 .camera-panel { padding: 10px 14px 12px; }
 .camera-header {

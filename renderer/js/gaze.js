@@ -221,8 +221,8 @@ export class GazeCorrector {
       if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
     return {
-      cx:    (minX + maxX) / 2,
-      cy:    (minY + maxY) / 2,
+      cx: (minX + maxX) / 2,
+      cy: (minY + maxY) / 2,
       halfW: (maxX - minX) / 2 * 1.5,  // covers full eye white + lash line
       halfH: (maxY - minY) / 2 * 2.4,  // tall: upper + lower eyelid skin
     };
@@ -232,7 +232,7 @@ export class GazeCorrector {
     const str = this.correctionStrength;
 
     // ── Left eye ────────────────────────────────────────────────────────
-    const li   = this._getIrisInfo(lm, this.LEFT_IRIS, w, h);
+    const li = this._getIrisInfo(lm, this.LEFT_IRIS, w, h);
     const lbox = this._getEyeBox(lm, this.LEFT_EYE, w, h);
     // Target = eye-socket centre shifted upward toward the camera lens
     const lcTarget = {
@@ -242,7 +242,7 @@ export class GazeCorrector {
     this._warpEye(ctx, li, lbox, lcTarget, w, h, str);
 
     // ── Right eye ───────────────────────────────────────────────────────
-    const ri   = this._getIrisInfo(lm, this.RIGHT_IRIS, w, h);
+    const ri = this._getIrisInfo(lm, this.RIGHT_IRIS, w, h);
     const rbox = this._getEyeBox(lm, this.RIGHT_EYE, w, h);
     const rcTarget = {
       x: rbox.cx,
@@ -278,7 +278,7 @@ export class GazeCorrector {
     const wcx = iris.cx;
     const wcy = iris.cy;
 
-    const pad    = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))) + 4;
+    const pad = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy))) + 4;
     const margin = Math.ceil(Math.max(halfW, halfH)) + pad;
 
     const x0 = Math.max(0, Math.floor(wcx - margin));
@@ -298,15 +298,15 @@ export class GazeCorrector {
         const canvasY = y0 + py;
 
         // Elliptical distance from IRIS CENTER (0=iris, 1=socket edge, >1=outside)
-        const ex    = (canvasX - wcx) / halfW;
-        const ey    = (canvasY - wcy) / halfH;
+        const ex = (canvasX - wcx) / halfW;
+        const ey = (canvasY - wcy) / halfH;
         const eDist = Math.sqrt(ex * ex + ey * ey);
 
         const di = (py * pw + px) * 4;
 
         if (eDist < 1.0) {
           // Smoothstep: wf=1.0 at iris center, 0 at socket rim
-          const wf   = 1.0 - eDist * eDist * (3.0 - 2.0 * eDist);
+          const wf = 1.0 - eDist * eDist * (3.0 - 2.0 * eDist);
           const srcX = (canvasX - dx * wf) - x0;
           const srcY = (canvasY - dy * wf) - y0;
 
@@ -326,12 +326,12 @@ export class GazeCorrector {
           for (let c = 0; c < 4; c++) {
             dst.data[di + c] =
               src.data[i00 + c] * (1 - fx) * (1 - fy) +
-              src.data[i10 + c] * fx       * (1 - fy) +
-              src.data[i01 + c] * (1 - fx) * fy       +
-              src.data[i11 + c] * fx       * fy;
+              src.data[i10 + c] * fx * (1 - fy) +
+              src.data[i01 + c] * (1 - fx) * fy +
+              src.data[i11 + c] * fx * fy;
           }
         } else {
-          dst.data[di]     = src.data[di];
+          dst.data[di] = src.data[di];
           dst.data[di + 1] = src.data[di + 1];
           dst.data[di + 2] = src.data[di + 2];
           dst.data[di + 3] = src.data[di + 3];

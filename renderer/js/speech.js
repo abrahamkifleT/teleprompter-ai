@@ -19,6 +19,7 @@ export class SpeechCapture {
     this._onInterim = null;
     this._onFinal = null;
     this._onError = null;
+    this._onAudioLevel = null; // callback(rms: number 0-100) — real-time level
 
     this._silenceMs = 3000;   // ms of silence before auto-submit
     this._audioContext = null;
@@ -46,18 +47,22 @@ export class SpeechCapture {
 
   // ── Public lifecycle ──────────────────────────────────────────────────────
 
-  async start(onInterim, onFinal, onError) {
+  async start(onInterim, onFinal, onError, onAudioLevel) {
     if (this.isListening) this.stop();
 
     this._onInterim = onInterim;
     this._onFinal = onFinal;
     this._onError = onError;
+    this._onAudioLevel = onAudioLevel || null;
     this.audioChunks = [];
     this._hasSpeech = false;
     this._submitting = false;
 
+    console.log('[Speech] Starting audio capture…');
+
     try {
       await this._acquireStream();
+      console.log('[Speech] Stream acquired — tracks:', this._stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', '));
 
       // AudioContext for silence detection
       this._audioContext = new AudioContext();
@@ -68,27 +73,34 @@ export class SpeechCapture {
 
       // MediaRecorder for audio capture
       const mimeType = this._bestMimeType();
+      console.log('[Speech] Using MIME type:', mimeType || '(browser default)');
       this.mediaRecorder = new MediaRecorder(
         this._stream,
         mimeType ? { mimeType } : {}
       );
 
       this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) this.audioChunks.push(e.data);
+        if (e.data && e.data.size > 0) {
+          this.audioChunks.push(e.data);
+          console.log(`[Speech] Chunk received: ${e.data.size} bytes (total chunks: ${this.audioChunks.length})`);
+        }
       };
 
       this.mediaRecorder.onerror = (e) => {
+        console.error('[Speech] MediaRecorder error:', e.error || e);
         if (this._onError) this._onError('Recording error: ' + (e.error || e));
       };
 
       this.mediaRecorder.start(250); // collect a chunk every 250 ms
       this.isListening = true;
+      console.log('[Speech] ✅ MediaRecorder started — state:', this.mediaRecorder.state);
 
       if (this._onInterim) this._onInterim('🎙 Listening — speak now…');
       this._startSilenceDetection();
 
     } catch (err) {
       this.isListening = false;
+      console.error('[Speech] ❌ Failed to start:', err.name, err.message);
       const friendly =
         err.name === 'NotAllowedError'
           ? 'Microphone permission denied — please allow microphone access in system settings.'
@@ -176,14 +188,22 @@ export class SpeechCapture {
         dataArray.reduce((s, v) => s + v * v, 0) / bufLen
       );
 
+      // Normalize to 0-100 and emit to UI for live visualizer
+      const level = Math.min(100, Math.round(rms / 1.28 * 1));
+      if (this._onAudioLevel) this._onAudioLevel(level, rms);
+
       if (rms > 8) {
         // Sound above threshold → reset silence clock
+        if (!this._hasSpeech) console.log('[Speech] 🎤 Speech detected! RMS:', rms.toFixed(1));
         this._hasSpeech = true;
         silenceStart = null;
         if (this._onInterim) this._onInterim('🎙 Hearing you…');
       } else if (this._hasSpeech) {
         // Below threshold after speech → count down to submit
-        if (!silenceStart) silenceStart = Date.now();
+        if (!silenceStart) {
+          silenceStart = Date.now();
+          console.log('[Speech] Silence detected, starting countdown…');
+        }
         const elapsed = Date.now() - silenceStart;
         const remaining = Math.max(0, Math.ceil((this._silenceMs - elapsed) / 1000));
         if (this._onInterim) this._onInterim(`🤫 Done speaking? Sending in ${remaining}s…`);

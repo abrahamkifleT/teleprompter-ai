@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell, dialog, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell, dialog, Tray, Menu, nativeImage, session } = require('electron');
 const path = require('path');
 const http = require('http');
 const { OpenAI } = require('openai');
@@ -308,6 +308,20 @@ ipcMain.handle('store:getAll', () => Store.getAll());
 
 // ─── App Lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  // ── Grant microphone (and camera) permissions automatically ──────────────
+  // Without this, Electron silently denies getUserMedia() calls and the mic
+  // appears to "not work" even though no error is thrown.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    const allowed = ['media', 'mediaKeySystem', 'display-capture', 'audioCapture', 'videoCapturer'];
+    callback(allowed.includes(permission));
+  });
+
+  // Also handle permission-check requests (Chromium 96+)
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    const allowed = ['media', 'mediaKeySystem', 'display-capture', 'audioCapture', 'videoCapturer'];
+    return allowed.includes(permission);
+  });
+
   createMainWindow();
   registerGlobalShortcuts();
   // createTray(); // uncomment for tray icon support

@@ -54,6 +54,10 @@ const speedLabel = $('speed-label');
 const btnCameraPreview = $('btn-camera-preview');
 const gazeToggle = $('gaze-toggle');
 const clickThroughBanner = $('click-through-banner');
+const audioLevelContainer = $('audio-level-container');
+const audioLevelBar = $('audio-level-bar');
+const audioRmsValue = $('audio-rms-value');
+const audioStatusText = $('audio-status-text');
 
 // ─── Load persisted settings ──────────────────────────────────────────────
 async function loadSettings() {
@@ -73,9 +77,9 @@ async function loadSettings() {
   // Force strong defaults for top-mounted camera. If old weak values were
   // saved (gazeStrength < 80 or cameraOffsetY > -25), upgrade them silently.
   const savedStrength = settings.gazeStrength;
-  const savedOffset   = settings.cameraOffsetY;
-  const gazeStrength  = (!savedStrength || savedStrength < 80)  ? 88  : savedStrength;
-  const camOffsetY    = (!savedOffset   || savedOffset   > -25) ? -45 : savedOffset;
+  const savedOffset = settings.cameraOffsetY;
+  const gazeStrength = (!savedStrength || savedStrength < 80) ? 88 : savedStrength;
+  const camOffsetY = (!savedOffset || savedOffset > -25) ? -45 : savedOffset;
   gaze.setCorrectionStrength(gazeStrength / 100);
   gaze.setCameraOffsetY(camOffsetY);
 
@@ -159,6 +163,7 @@ function clearAI() {
   aiQuestion.classList.add('hidden');
   aiThinkingBadge.classList.add('hidden');
   aiListeningBadge.classList.add('hidden');
+  audioLevelContainer.classList.add('hidden');
   setStatus('IDLE', 'idle');
 }
 
@@ -174,6 +179,12 @@ function startListening() {
   aiQuestion.classList.add('hidden');
   aiListeningBadge.classList.remove('hidden');
   setStatus('LISTENING', 'listening');
+
+  // Show audio level indicator
+  audioLevelContainer.classList.remove('hidden');
+  audioLevelBar.style.width = '0%';
+  audioStatusText.textContent = 'Waiting for sound…';
+  audioStatusText.classList.remove('active');
 
   // ── Always pass the current API key before starting ───────────────────
   speech.setApiKey(state.apiKey);
@@ -192,6 +203,32 @@ function startListening() {
     (err) => {
       stopListening(false);
       showNotification(`❌ ${err}`);
+    },
+    // audio level: real-time mic level for the visualizer
+    (level, rms) => {
+      audioLevelBar.style.width = `${level}%`;
+      audioRmsValue.textContent = `RMS: ${rms.toFixed(1)}`;
+
+      // Color-code the bar
+      audioLevelBar.classList.remove('level-low', 'level-mid', 'level-high');
+      if (level > 50) {
+        audioLevelBar.classList.add('level-high');
+      } else if (level > 15) {
+        audioLevelBar.classList.add('level-mid');
+      } else {
+        audioLevelBar.classList.add('level-low');
+      }
+
+      // Update status text
+      if (rms > 8) {
+        audioStatusText.textContent = `✅ Sound detected! Level: ${level}%`;
+        audioStatusText.classList.add('active');
+      } else {
+        audioStatusText.textContent = level > 2
+          ? `Low audio — speak louder or move closer (${level}%)`
+          : 'Waiting for sound…';
+        audioStatusText.classList.remove('active');
+      }
     }
   );
 }
@@ -202,6 +239,8 @@ function stopListening(alsoStopSpeech = true) {
   btnListen.classList.remove('active');
   btnListen.innerHTML = '🎤 LISTEN';
   aiListeningBadge.classList.add('hidden');
+  // Hide audio level indicator
+  audioLevelContainer.classList.add('hidden');
   if (alsoStopSpeech) speech.stop();
 }
 

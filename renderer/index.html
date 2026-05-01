@@ -66,6 +66,18 @@
     <span id="ai-thinking-badge" class="badge badge-thinking hidden">💭 THINKING</span>
     <button class="tb-btn" id="btn-clear-ai" title="Clear">✕</button>
   </div>
+  <!-- Live Audio Level Indicator -->
+  <div id="audio-level-container" class="audio-level-container hidden">
+    <div class="audio-level-label">
+      <span class="audio-level-icon">🎙</span>
+      <span id="audio-level-text">MIC LEVEL</span>
+      <span id="audio-rms-value" class="audio-rms">RMS: 0</span>
+    </div>
+    <div class="audio-level-track">
+      <div id="audio-level-bar" class="audio-level-bar"></div>
+    </div>
+    <div id="audio-status-text" class="audio-status-text">Waiting for sound…</div>
+  </div>
   <div id="ai-question" class="ai-question hidden"></div>
   <div id="ai-answer" class="ai-answer">Press <kbd>F2</kbd> to capture a question...</div>
 </div>
