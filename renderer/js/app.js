@@ -6,6 +6,24 @@ import { AIService } from './ai.js';
 
 const api = window.electronAPI;
 
+// ─── Forward Console Logs to Main Process Terminal ────────────────────────
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+console.log = (...args) => {
+  originalLog(...args);
+  if (api && api.log) api.log(...args);
+};
+console.warn = (...args) => {
+  originalWarn(...args);
+  if (api && api.log) api.log('[WARN]', ...args);
+};
+console.error = (...args) => {
+  originalError(...args);
+  if (api && api.log) api.log('[ERROR]', ...args);
+};
+
 // ─── State ────────────────────────────────────────────────────────────────
 const state = {
   isListening: false,

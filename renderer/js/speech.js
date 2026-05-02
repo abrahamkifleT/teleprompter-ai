@@ -84,6 +84,15 @@ export class SpeechCapture {
 
       // AudioContext for silence detection — analyser taps the merged stream
       this._audioContext = new AudioContext();
+
+      // CRITICAL: AudioContext starts suspended in Chromium. Must resume explicitly.
+      // Without this, the analyser returns all zeros even if the mic is working.
+      if (this._audioContext.state === 'suspended') {
+        console.log('[Speech] AudioContext is suspended — resuming...');
+        await this._audioContext.resume();
+      }
+      console.log('[Speech] AudioContext state:', this._audioContext.state, '| sampleRate:', this._audioContext.sampleRate);
+
       const source = this._audioContext.createMediaStreamSource(recordingStream);
       this._analyser = this._audioContext.createAnalyser();
       this._analyser.fftSize = 512;
@@ -193,44 +202,82 @@ export class SpeechCapture {
   async _getMicStream() {
     console.log('[Speech] Requesting mic stream via getUserMedia...');
 
-    // Check if mediaDevices API is available
-    if (!navigator.mediaDevices) {
-      throw new Error(
-        'navigator.mediaDevices is not available. ' +
-        'This usually means the page is not in a secure context. ' +
-        'Current protocol: ' + window.location.protocol
-      );
-    }
-    if (!navigator.mediaDevices.getUserMedia) {
-      throw new Error('getUserMedia is not available in this browser/environment.');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('navigator.mediaDevices.getUserMedia is not available.');
     }
 
-    // List available devices first (for diagnostics)
+    let devices = [];
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const audioInputs = devices.filter(d => d.kind === 'audioinput');
-      console.log('[Speech] Available audio input devices:', audioInputs.length);
-      audioInputs.forEach((d, i) => console.log(`  [${i}] ${d.label || '(unnamed)'} — ${d.deviceId.slice(0,8)}...`));
-      if (audioInputs.length === 0) {
-        throw new Error('No microphone found. Connect a microphone and try again.');
-      }
-    } catch (enumErr) {
-      console.warn('[Speech] Could not enumerate devices:', enumErr.message);
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      devices = allDevices.filter(d => d.kind === 'audioinput');
+      console.log('[Speech] Available audio input devices:', devices.length);
+      devices.forEach((d, i) => console.log(`  [${i}] ${d.label || '(unnamed)'} — ${d.deviceId.slice(0,8)}...`));
+    } catch (e) {
+      console.warn('[Speech] Could not enumerate devices:', e.message);
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        sampleRate: 16000,
-      },
-      video: false,
-    });
-    this._streams.push(stream);
-    const tracks = stream.getAudioTracks();
-    console.log('[Speech] ✅ Mic stream acquired —', tracks.length, 'track(s)');
-    tracks.forEach((t, i) => console.log(`  Track[${i}]: ${t.label}, enabled=${t.enabled}, muted=${t.muted}, readyState=${t.readyState}`));
-    return stream;
+    // Array of deviceIds to try. Try 'undefined' (system default) first.
+    // Then try the specific hardware device IDs.
+    const deviceIdsToTry = [undefined, ...devices.map(d => d.deviceId).filter(id => id && id !== 'default' && id !== 'communications')];
+    
+    let lastError = null;
+
+    for (let i = 0; i < deviceIdsToTry.length; i++) {
+      const deviceId = deviceIdsToTry[i];
+      try {
+        console.log(`\n[Speech] 🔄 Trying microphone ${i+1}/${deviceIdsToTry.length} (deviceId: ${deviceId || 'system default'})`);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            ...(deviceId ? { deviceId: { exact: deviceId } } : {})
+          },
+          video: false,
+        });
+
+        const tracks = stream.getAudioTracks();
+        tracks.forEach(t => t.enabled = true); // Force enable
+
+        // Sanity test: read a few samples to verify it's not a muted virtual device
+        const testCtx = new AudioContext();
+        if (testCtx.state === 'suspended') await testCtx.resume();
+        const testSource = testCtx.createMediaStreamSource(stream);
+        const testAnalyser = testCtx.createAnalyser();
+        testAnalyser.fftSize = 256;
+        testSource.connect(testAnalyser);
+        const testData = new Uint8Array(testAnalyser.frequencyBinCount);
+        
+        // Wait 400ms for audio buffers to fill
+        await new Promise(r => setTimeout(r, 400));
+        testAnalyser.getByteFrequencyData(testData);
+        const testRms = Math.sqrt(testData.reduce((s, v) => s + v * v, 0) / testData.length);
+        
+        console.log(`[Speech] 🔍 Audio test for this mic — RMS: ${testRms.toFixed(2)}`);
+        
+        testSource.disconnect();
+        testCtx.close();
+
+        if (testRms >= 0.5) {
+           console.log(`[Speech] ✅ Found working microphone! Using: ${tracks[0]?.label}`);
+           this._streams.push(stream);
+           return stream; // SUCCESS!
+        } else {
+           console.warn(`[Speech] ⚠️ Microphone captured silence (RMS=0). Skipping broken/virtual device...`);
+           stream.getTracks().forEach(t => t.stop()); // Clean up the silent stream
+           lastError = new Error('Microphone is capturing silence (RMS=0).');
+        }
+      } catch (err) {
+        console.warn(`[Speech] ⚠️ Failed to open microphone: ${err.message}`);
+        lastError = err;
+      }
+    }
+
+    // If we get here, EVERY microphone failed or returned silence
+    throw new Error(
+      'Could not find a working microphone. ' +
+      (lastError ? lastError.message : '') + 
+      ' Check Windows Settings -> Privacy & Security -> Microphone and ensure "Let desktop apps access your microphone" is ON.'
+    );
   }
 
   async _getSystemStream() {
@@ -401,11 +448,13 @@ export class SpeechCapture {
    */
   _startLiveRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      // This is EXPECTED in Electron — it uses open-source Chromium which
-      // does NOT include Google's proprietary speech recognition service.
+    // In Electron, SpeechRecognition exists but fails with a "network" error
+    // because the open-source Chromium build lacks Google's proprietary API keys.
+    const isElectron = !!(window.electronAPI);
+
+    if (!SpeechRecognition || isElectron) {
       // Live transcript will not work, but Whisper transcription still does.
-      console.warn('[Speech] webkitSpeechRecognition not available in Electron — live transcript disabled.');
+      console.warn('[Speech] webkitSpeechRecognition not available or running in Electron — live transcript disabled.');
       console.warn('[Speech] (This is normal. Whisper will handle transcription after you finish speaking.)');
       if (this._onLiveTranscript) {
         this._onLiveTranscript('(Live preview not available in Electron — Whisper will transcribe after you finish speaking)', false);

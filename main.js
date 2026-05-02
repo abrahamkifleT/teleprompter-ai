@@ -287,6 +287,11 @@ ipcMain.handle('settings:open', () => createSettingsWindow());
 ipcMain.handle('settings:close', () => settingsWindow?.close());
 ipcMain.handle('shell:openCamera', () => shell.openExternal('http://localhost:8765'));
 
+// Forward renderer console logs to terminal for debugging
+ipcMain.on('renderer:log', (event, ...args) => {
+  console.log('[Renderer]', ...args);
+});
+
 // Storage via electron store (simple JSON in userData)
 const Store = (() => {
   const fs = require('fs');

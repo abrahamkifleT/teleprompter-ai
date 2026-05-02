@@ -41,4 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onGlobalToggleListen: (cb) => ipcRenderer.on('global:toggle-listen', () => cb()),
   onGlobalClickThroughChanged: (cb) => ipcRenderer.on('global:click-through-changed', (_, v) => cb(v)),
   onGlobalToggleOpacity: (cb) => ipcRenderer.on('global:toggle-opacity', () => cb()),
+
+  // Forward renderer logs to main process terminal for debugging
+  log: (...args) => ipcRenderer.send('renderer:log', ...args),
 });
