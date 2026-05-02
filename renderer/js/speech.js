@@ -1,14 +1,12 @@
 // ─── speech.js — Audio capture → OpenAI Whisper transcription ───────────────
 //
-// Replaces the Web Speech API (which throws "network" errors in Electron
-// because it requires a live connection to Google's speech servers).
+// Supports three capture modes:
+//   'mic'    — microphone only (default)
+//   'system' — internal/system audio only (meeting apps, browser tabs, etc.)
+//   'both'   — mic + system audio merged into one stream (best for interviews:
+//              captures interviewer via system audio + your replies via mic)
 //
-// New flow:
-//   1. getUserMedia (mic) or getDisplayMedia (system/PC audio)
-//   2. MediaRecorder collects audio chunks
-//   3. AudioContext analyser detects silence
-//   4. After configurable silence threshold → POST to Whisper API
-//   5. Return transcript via onFinal callback
+// Flow: stream → MediaRecorder → silence detection → Whisper API → transcript
 
 export class SpeechCapture {
   constructor() {
@@ -19,95 +17,117 @@ export class SpeechCapture {
     this._onInterim = null;
     this._onFinal = null;
     this._onError = null;
-    this._onAudioLevel = null; // callback(rms: number 0-100) — real-time level
+    this._onAudioLevel = null;
+    this._onLiveTranscript = null;  // real-time word display callback
 
-    this._silenceMs = 3000;   // ms of silence before auto-submit
+    this._silenceMs = 3000;
     this._audioContext = null;
     this._analyser = null;
     this._silenceCheckInt = null;
-    this._stream = null;
+
+    // All acquired streams — kept so we can stop them individually on cleanup
+    this._streams = [];
     this._apiKey = null;
-    this._hasSpeech = false;  // true once any sound above threshold heard
+    this._hasSpeech = false;
     this._submitting = false;
-    this._audioSource = 'mic';  // 'mic' | 'system'
+
+    // 'mic' | 'system' | 'both'
+    this._audioSource = 'mic';
+
+    // ── Live SpeechRecognition (browser-native, runs in parallel with Whisper)
+    this._liveRecognition = null;
+    this._liveTranscript = '';      // accumulated live words
+    this._liveInterimText = '';     // current interim (unfinished) phrase
   }
 
   // ── Configuration ─────────────────────────────────────────────────────────
 
-  /** Pass in the OpenAI API key before calling start() */
   setApiKey(key) { this._apiKey = (key || '').trim(); }
 
-  /** 'mic' = microphone, 'system' = PC / system audio (getDisplayMedia) */
-  setAudioSource(src) { this._audioSource = src === 'system' ? 'system' : 'mic'; }
+  /**
+   * Set the audio capture mode.
+   * @param {'mic'|'system'|'both'} src
+   */
+  setAudioSource(src) {
+    if (['mic', 'system', 'both'].includes(src)) this._audioSource = src;
+  }
 
-  /** Auto-submit silence timeout in ms (clamped 1s – 15s) */
+  getAudioSource() { return this._audioSource; }
+
   setSilenceTimeout(ms) {
     this._silenceMs = Math.max(1000, Math.min(15000, parseInt(ms) || 3000));
   }
 
   // ── Public lifecycle ──────────────────────────────────────────────────────
 
-  async start(onInterim, onFinal, onError, onAudioLevel) {
+  async start(onInterim, onFinal, onError, onAudioLevel, onLiveTranscript) {
     if (this.isListening) this.stop();
 
     this._onInterim = onInterim;
     this._onFinal = onFinal;
     this._onError = onError;
     this._onAudioLevel = onAudioLevel || null;
+    this._onLiveTranscript = onLiveTranscript || null;
     this.audioChunks = [];
     this._hasSpeech = false;
     this._submitting = false;
+    this._streams = [];
+    this._liveTranscript = '';
+    this._liveInterimText = '';
 
-    console.log('[Speech] Starting audio capture…');
+    console.log(`[Speech] Starting in mode: ${this._audioSource}`);
+    console.log('[Speech] navigator.mediaDevices available:', !!navigator.mediaDevices);
+    console.log('[Speech] getUserMedia available:', !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
 
     try {
-      await this._acquireStream();
-      console.log('[Speech] Stream acquired — tracks:', this._stream.getTracks().map(t => `${t.kind}:${t.label}`).join(', '));
+      const recordingStream = await this._buildRecordingStream();
 
-      // AudioContext for silence detection
+      // AudioContext for silence detection — analyser taps the merged stream
       this._audioContext = new AudioContext();
-      const source = this._audioContext.createMediaStreamSource(this._stream);
+      const source = this._audioContext.createMediaStreamSource(recordingStream);
       this._analyser = this._audioContext.createAnalyser();
       this._analyser.fftSize = 512;
       source.connect(this._analyser);
 
-      // MediaRecorder for audio capture
       const mimeType = this._bestMimeType();
-      console.log('[Speech] Using MIME type:', mimeType || '(browser default)');
+      console.log('[Speech] MIME type:', mimeType || '(browser default)');
       this.mediaRecorder = new MediaRecorder(
-        this._stream,
+        recordingStream,
         mimeType ? { mimeType } : {}
       );
 
       this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          this.audioChunks.push(e.data);
-          console.log(`[Speech] Chunk received: ${e.data.size} bytes (total chunks: ${this.audioChunks.length})`);
-        }
+        if (e.data && e.data.size > 0) this.audioChunks.push(e.data);
       };
-
       this.mediaRecorder.onerror = (e) => {
-        console.error('[Speech] MediaRecorder error:', e.error || e);
+        console.error('[Speech] Recorder error:', e.error || e);
         if (this._onError) this._onError('Recording error: ' + (e.error || e));
       };
 
-      this.mediaRecorder.start(250); // collect a chunk every 250 ms
+      this.mediaRecorder.start(250);
       this.isListening = true;
-      console.log('[Speech] ✅ MediaRecorder started — state:', this.mediaRecorder.state);
+      console.log('[Speech] ✅ Recording started');
 
       if (this._onInterim) this._onInterim('🎙 Listening — speak now…');
       this._startSilenceDetection();
 
+      // Start browser-native live transcription (runs in parallel)
+      this._startLiveRecognition();
+
     } catch (err) {
       this.isListening = false;
+      this._releaseStreams();
       console.error('[Speech] ❌ Failed to start:', err.name, err.message);
-      const friendly =
-        err.name === 'NotAllowedError'
-          ? 'Microphone permission denied — please allow microphone access in system settings.'
-          : err.name === 'NotFoundError'
-            ? 'No microphone found. Please connect a microphone and try again.'
-            : err.message || String(err);
-      if (onError) onError(friendly);
+
+      let msg = err.message || String(err);
+      if (err.name === 'NotAllowedError')
+        msg = 'Permission denied — allow microphone access in system settings.';
+      else if (err.name === 'NotFoundError')
+        msg = 'No microphone found. Connect a microphone and try again.';
+      else if (err.name === 'AbortError' || msg.toLowerCase().includes('cancel'))
+        msg = 'Screen share cancelled — click "Share" and enable "Share system audio" to capture internal audio.';
+
+      if (onError) onError(msg);
     }
   }
 
@@ -126,43 +146,79 @@ export class SpeechCapture {
       this._analyser = null;
     }
 
-    if (this._stream) {
-      this._stream.getTracks().forEach((t) => t.stop());
-      this._stream = null;
-    }
-
+    this._stopLiveRecognition();
+    this._releaseStreams();
     this.isListening = false;
     this._submitting = false;
   }
 
-  /** Force-submit whatever audio has been captured so far */
   forceSubmit() {
     if (this.isListening) this._submit();
   }
 
-  // ── Stream acquisition ────────────────────────────────────────────────────
+  // ── Stream building ───────────────────────────────────────────────────────
 
-  async _acquireStream() {
-    if (this._audioSource === 'system') {
-      try {
-        // Capture whatever audio is playing on the PC (Zoom, browser, etc.)
-        this._stream = await navigator.mediaDevices.getDisplayMedia({
-          video: false,
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            sampleRate: 44100,
-          },
-        });
-        return;
-      } catch (err) {
-        // User cancelled screen-share or no system audio available → fall through to mic
-        console.warn('[Speech] System audio unavailable, falling back to mic:', err.message);
+  /**
+   * Returns a single MediaStream to record from, based on _audioSource.
+   *
+   * 'mic'    → getUserMedia
+   * 'system' → getDisplayMedia (audio-only, requires user picks screen + ticks
+   *            "Share system audio" / "Share audio" in the browser dialog)
+   * 'both'   → merge mic + system via Web Audio API into one destination stream
+   */
+  async _buildRecordingStream() {
+    switch (this._audioSource) {
+      case 'system':
+        return await this._getSystemStream();
+
+      case 'both': {
+        // Acquire both; if system fails gracefully fall back to mic-only
+        const micStream = await this._getMicStream();
+        let sysStream = null;
+        try {
+          sysStream = await this._getSystemStream();
+        } catch (err) {
+          console.warn('[Speech] System audio unavailable, using mic only:', err.message);
+          return micStream;
+        }
+        return this._mergeStreams(micStream, sysStream);
       }
+
+      case 'mic':
+      default:
+        return await this._getMicStream();
+    }
+  }
+
+  async _getMicStream() {
+    console.log('[Speech] Requesting mic stream via getUserMedia...');
+
+    // Check if mediaDevices API is available
+    if (!navigator.mediaDevices) {
+      throw new Error(
+        'navigator.mediaDevices is not available. ' +
+        'This usually means the page is not in a secure context. ' +
+        'Current protocol: ' + window.location.protocol
+      );
+    }
+    if (!navigator.mediaDevices.getUserMedia) {
+      throw new Error('getUserMedia is not available in this browser/environment.');
     }
 
-    // Default: microphone
-    this._stream = await navigator.mediaDevices.getUserMedia({
+    // List available devices first (for diagnostics)
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput');
+      console.log('[Speech] Available audio input devices:', audioInputs.length);
+      audioInputs.forEach((d, i) => console.log(`  [${i}] ${d.label || '(unnamed)'} — ${d.deviceId.slice(0,8)}...`));
+      if (audioInputs.length === 0) {
+        throw new Error('No microphone found. Connect a microphone and try again.');
+      }
+    } catch (enumErr) {
+      console.warn('[Speech] Could not enumerate devices:', enumErr.message);
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
@@ -170,6 +226,82 @@ export class SpeechCapture {
       },
       video: false,
     });
+    this._streams.push(stream);
+    const tracks = stream.getAudioTracks();
+    console.log('[Speech] ✅ Mic stream acquired —', tracks.length, 'track(s)');
+    tracks.forEach((t, i) => console.log(`  Track[${i}]: ${t.label}, enabled=${t.enabled}, muted=${t.muted}, readyState=${t.readyState}`));
+    return stream;
+  }
+
+  async _getSystemStream() {
+    // getDisplayMedia returns a stream containing system/tab/app audio.
+    // The user MUST tick "Share audio" / "Share system audio" in the picker.
+    // video:false alone is not always honoured by browsers; we request a
+    // minimal video track and discard it after stream creation to maximise
+    // browser compatibility while keeping the audio track alive.
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: 1, height: 1, frameRate: 1 }, // minimal; discarded below
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        sampleRate: 44100,
+      },
+    });
+
+    // Stop the video track immediately — we only want audio
+    stream.getVideoTracks().forEach(t => t.stop());
+
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      stream.getTracks().forEach(t => t.stop());
+      throw new Error(
+        'No audio track in screen share. In the share dialog, make sure to tick "Share system audio" or "Share audio".'
+      );
+    }
+
+    this._streams.push(stream);
+    console.log('[Speech] System audio stream acquired:', audioTracks.map(t => t.label).join(', '));
+    return stream;
+  }
+
+  /**
+   * Merge mic + system audio streams into a single MediaStream using
+   * the Web Audio API (both play through the same AudioContext destination).
+   */
+  _mergeStreams(micStream, sysStream) {
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+
+    const micSrc = ctx.createMediaStreamSource(micStream);
+    const sysSrc = ctx.createMediaStreamSource(sysStream);
+
+    // Optional: slight boost on mic so your voice doesn't get drowned out
+    const micGain = ctx.createGain();
+    micGain.gain.value = 1.2;
+    micSrc.connect(micGain);
+    micGain.connect(dest);
+
+    const sysGain = ctx.createGain();
+    sysGain.gain.value = 1.0;
+    sysSrc.connect(sysGain);
+    sysGain.connect(dest);
+
+    // Keep a reference so we can close it during stop()
+    this._mergeContext = ctx;
+
+    const merged = dest.stream;
+    console.log('[Speech] Mixed stream created (mic + system)');
+    return merged;
+  }
+
+  _releaseStreams() {
+    this._streams.forEach(s => s.getTracks().forEach(t => t.stop()));
+    this._streams = [];
+    if (this._mergeContext) {
+      try { this._mergeContext.close(); } catch { }
+      this._mergeContext = null;
+    }
   }
 
   // ── Silence detection ─────────────────────────────────────────────────────
@@ -183,27 +315,17 @@ export class SpeechCapture {
       if (!this._analyser || !this.isListening) return;
 
       this._analyser.getByteFrequencyData(dataArray);
-      // RMS of frequency data as proxy for loudness
-      const rms = Math.sqrt(
-        dataArray.reduce((s, v) => s + v * v, 0) / bufLen
-      );
-
-      // Normalize to 0-100 and emit to UI for live visualizer
-      const level = Math.min(100, Math.round(rms / 1.28 * 1));
+      const rms = Math.sqrt(dataArray.reduce((s, v) => s + v * v, 0) / bufLen);
+      const level = Math.min(100, Math.round(rms / 1.28));
       if (this._onAudioLevel) this._onAudioLevel(level, rms);
 
       if (rms > 8) {
-        // Sound above threshold → reset silence clock
-        if (!this._hasSpeech) console.log('[Speech] 🎤 Speech detected! RMS:', rms.toFixed(1));
+        if (!this._hasSpeech) console.log('[Speech] 🎤 Sound detected! RMS:', rms.toFixed(1));
         this._hasSpeech = true;
         silenceStart = null;
         if (this._onInterim) this._onInterim('🎙 Hearing you…');
       } else if (this._hasSpeech) {
-        // Below threshold after speech → count down to submit
-        if (!silenceStart) {
-          silenceStart = Date.now();
-          console.log('[Speech] Silence detected, starting countdown…');
-        }
+        if (!silenceStart) silenceStart = Date.now();
         const elapsed = Date.now() - silenceStart;
         const remaining = Math.max(0, Math.ceil((this._silenceMs - elapsed) / 1000));
         if (this._onInterim) this._onInterim(`🤫 Done speaking? Sending in ${remaining}s…`);
@@ -212,7 +334,7 @@ export class SpeechCapture {
     }, 150);
   }
 
-  // ── Submit audio to Whisper ───────────────────────────────────────────────
+  // ── Whisper transcription ─────────────────────────────────────────────────
 
   async _submit() {
     if (this._submitting || !this.isListening) return;
@@ -221,11 +343,10 @@ export class SpeechCapture {
     this._submitting = true;
     const chunks = [...this.audioChunks];
     const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-    this.stop(); // release mic/system audio immediately
+    this.stop();
 
     if (!this._apiKey) {
-      if (this._onError)
-        this._onError('No OpenAI API key — add it in Settings (Ctrl+,) then try again.');
+      if (this._onError) this._onError('No OpenAI API key — add it in Settings (Ctrl+,).');
       return;
     }
 
@@ -239,17 +360,15 @@ export class SpeechCapture {
         if (this._onError) this._onError('No speech detected — try speaking louder or closer to the mic.');
       }
     } catch (err) {
-      if (this._onError)
-        this._onError('Transcription failed: ' + (err.message || err));
+      if (this._onError) this._onError('Transcription failed: ' + (err.message || err));
     }
   }
 
   async _whisperTranscribe(chunks, mimeType) {
-    // Map MIME type to a file extension Whisper accepts
     let ext = 'webm';
     if (mimeType.includes('ogg')) ext = 'ogg';
-    else if (mimeType.includes('mp4')) ext = 'mp4';
-    else if (mimeType.includes('wav')) ext = 'wav';
+    if (mimeType.includes('mp4')) ext = 'mp4';
+    if (mimeType.includes('wav')) ext = 'wav';
 
     const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
     const formData = new FormData();
@@ -265,27 +384,105 @@ export class SpeechCapture {
 
     if (!resp.ok) {
       let msg = `Whisper API error (HTTP ${resp.status})`;
-      try {
-        const j = await resp.json();
-        msg = j.error?.message || msg;
-      } catch { }
+      try { const j = await resp.json(); msg = j.error?.message || msg; } catch { }
       throw new Error(msg);
     }
 
-    const data = await resp.json();
-    return data.text || '';
+    return (await resp.json()).text || '';
+  }
+
+  // ── Live SpeechRecognition (browser-native, for real-time word display) ──
+
+  /**
+   * Starts the browser's built-in SpeechRecognition engine in parallel.
+   * This does NOT replace Whisper — it runs alongside it so the user can
+   * see their words appear on-screen in real time (proving the app hears them).
+   * The final transcription is still handled by Whisper for accuracy.
+   */
+  _startLiveRecognition() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      // This is EXPECTED in Electron — it uses open-source Chromium which
+      // does NOT include Google's proprietary speech recognition service.
+      // Live transcript will not work, but Whisper transcription still does.
+      console.warn('[Speech] webkitSpeechRecognition not available in Electron — live transcript disabled.');
+      console.warn('[Speech] (This is normal. Whisper will handle transcription after you finish speaking.)');
+      if (this._onLiveTranscript) {
+        this._onLiveTranscript('(Live preview not available in Electron — Whisper will transcribe after you finish speaking)', false);
+      }
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      recognition.maxAlternatives = 1;
+
+      recognition.onresult = (event) => {
+        let interim = '';
+        let finalChunk = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalChunk += transcript + ' ';
+          } else {
+            interim += transcript;
+          }
+        }
+
+        if (finalChunk) {
+          this._liveTranscript += finalChunk;
+        }
+        this._liveInterimText = interim;
+
+        const display = (this._liveTranscript + interim).trim();
+        if (display && this._onLiveTranscript) {
+          this._onLiveTranscript(display, !!interim);
+        }
+      };
+
+      recognition.onerror = (e) => {
+        // 'no-speech' and 'aborted' are expected — don't treat as fatal
+        if (e.error === 'no-speech' || e.error === 'aborted') return;
+        console.warn('[Speech] Live recognition error:', e.error);
+      };
+
+      recognition.onend = () => {
+        // Restart if still listening (recognition auto-stops periodically)
+        if (this.isListening && this._liveRecognition) {
+          try { this._liveRecognition.start(); } catch { }
+        }
+      };
+
+      recognition.start();
+      this._liveRecognition = recognition;
+      console.log('[Speech] ✅ Live recognition started (real-time word display)');
+    } catch (err) {
+      console.warn('[Speech] Could not start live recognition:', err.message);
+    }
+  }
+
+  _stopLiveRecognition() {
+    if (this._liveRecognition) {
+      try { this._liveRecognition.abort(); } catch { }
+      this._liveRecognition = null;
+    }
+    this._liveTranscript = '';
+    this._liveInterimText = '';
+  }
+
+  /** Returns the current live transcript text */
+  getLiveTranscript() {
+    return (this._liveTranscript + this._liveInterimText).trim();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   _bestMimeType() {
-    const candidates = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/ogg;codecs=opus',
-      'audio/mp4',
-    ];
-    for (const t of candidates) {
+    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']) {
       if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
     }
     return '';

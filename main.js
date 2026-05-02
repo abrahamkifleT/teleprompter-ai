@@ -3,6 +3,14 @@ const path = require('path');
 const http = require('http');
 const { OpenAI } = require('openai');
 
+// ─── Chromium Flags for Media Access ─────────────────────────────────────────
+// These MUST be set before app.whenReady(). They fix getUserMedia() on file://
+// protocol which Chromium otherwise treats as an insecure origin.
+app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
+app.commandLine.appendSwitch('use-fake-ui-for-media-stream');       // auto-grant mic/camera without prompts
+app.commandLine.appendSwitch('allow-file-access-from-files');        // allow file:// to access media APIs
+app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'file://');  // treat file:// as secure context
+
 let mainWindow;
 let settingsWindow;
 let tray;
@@ -308,18 +316,27 @@ ipcMain.handle('store:getAll', () => Store.getAll());
 
 // ─── App Lifecycle ────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  // ── Grant microphone (and camera) permissions automatically ──────────────
-  // Without this, Electron silently denies getUserMedia() calls and the mic
-  // appears to "not work" even though no error is thrown.
+  // ── Grant ALL permissions automatically ────────────────────────────────────
+  // Electron uses open-source Chromium which requires explicit permission
+  // grants. Without this, getUserMedia() silently fails on Windows.
+  // We grant everything since this is a trusted desktop app.
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const allowed = ['media', 'mediaKeySystem', 'display-capture', 'audioCapture', 'videoCapturer'];
-    callback(allowed.includes(permission));
+    // Always grant — this is a local trusted app, not a website
+    console.log('[Permission] Requested:', permission, '→ GRANTED');
+    callback(true);
   });
 
-  // Also handle permission-check requests (Chromium 96+)
+  // Handle permission-check requests (Chromium 96+)
   session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
-    const allowed = ['media', 'mediaKeySystem', 'display-capture', 'audioCapture', 'videoCapturer'];
-    return allowed.includes(permission);
+    return true;  // Always allow
+  });
+
+  // ── Device-level permission grant (Electron 17+) ──────────────────────────
+  // Required for getUserMedia to access specific audio/video devices.
+  // Without this, some Electron versions silently block device enumeration.
+  session.defaultSession.setDevicePermissionHandler((details) => {
+    console.log('[DevicePermission] Requested:', details.deviceType, '→ GRANTED');
+    return true;
   });
 
   createMainWindow();

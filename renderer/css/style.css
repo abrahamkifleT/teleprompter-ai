@@ -609,3 +609,194 @@ body::before {
   border-radius: var(--radius);
 }
 body > * { position: relative; z-index: 1; }
+
+/* ─── Audio Source Selector (append to end of style.css) ───────────────── */
+
+/* Group wraps the <select> and LISTEN button as one visual unit */
+.audio-source-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-left: auto;     /* push to right side of bar */
+  border-right: none;
+  padding-right: 0;
+}
+
+/* The dropdown that picks mic / system / both */
+.audio-source-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(248,113,113,0.06);
+  border: 1px solid rgba(248,113,113,0.18);
+  border-right: none;                       /* flush with LISTEN button */
+  border-radius: var(--radius-xs) 0 0 var(--radius-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  height: 30px;
+  padding: 0 10px 0 8px;
+  outline: none;
+  transition: all var(--transition);
+  white-space: nowrap;
+  min-width: 82px;
+  letter-spacing: 0.3px;
+}
+
+.audio-source-select:hover {
+  background: rgba(248,113,113,0.14);
+  border-color: rgba(248,113,113,0.35);
+  color: var(--text-primary);
+}
+
+.audio-source-select option {
+  background: #0c0f1a;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+/* Override LISTEN button radius when next to the select */
+.audio-source-group .ctrl-btn-listen {
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  margin-left: 0;
+  border-left: none;
+}
+
+/* ─── Audio Level Indicator (already in the HTML, kept here for reference) */
+.audio-level-container {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(248,113,113,0.03);
+  animation: fadeSlideIn 0.3s ease;
+}
+
+.audio-level-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.audio-level-icon {
+  font-size: 13px;
+  animation: pulse-glow 1.2s ease infinite;
+}
+
+.audio-level-label span:nth-child(2) {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--red);
+}
+
+.audio-rms {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.4px;
+}
+
+.audio-level-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.audio-level-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  transition: width 0.1s ease-out;
+}
+.audio-level-bar.level-low  { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.audio-level-bar.level-mid  { background: linear-gradient(90deg, var(--accent), var(--green)); box-shadow: 0 0 8px var(--green-glow); }
+.audio-level-bar.level-high { background: linear-gradient(90deg, var(--green), var(--yellow), var(--red)); box-shadow: 0 0 12px var(--red-glow); }
+
+.audio-status-text {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+  transition: color var(--transition);
+}
+.audio-status-text.active { color: var(--green); }
+
+/* ─── Live Transcript Overlay ────────────────────────────────────────────── */
+.live-transcript-container {
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(52,211,153,0.04) 0%, rgba(108,142,242,0.04) 100%);
+  animation: fadeSlideIn 0.35s ease;
+}
+
+.live-transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Pulsing red dot — proves the mic is live */
+.live-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red-glow);
+  animation: livePulse 1s ease infinite;
+  flex-shrink: 0;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.75); }
+}
+
+.live-transcript-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.live-transcript-text {
+  font-family: var(--font-prompt);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  max-height: 80px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(52,211,153,0.12);
+  border-radius: var(--radius-xs);
+  word-break: break-word;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+/* When interim text is still being recognized (not yet finalized) */
+.live-transcript-text.interim {
+  border-color: rgba(251,191,36,0.25);
+  color: rgba(241,245,249,0.7);
+}
+
+/* Empty state placeholder */
+.live-transcript-text:empty::before {
+  content: 'Start speaking — your words will appear here…';
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 13px;
+}
+

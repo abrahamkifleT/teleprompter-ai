@@ -21,6 +21,7 @@ Keep answers concise, confident, and natural-sounding (under 120 words unless th
 Speak in first person. Avoid bullet points — use flowing sentences that are easy to read aloud.
 Be direct and sound knowledgeable.`,
   lastQuestion: '',
+  audioSource: 'mic', // 'mic' | 'system' | 'both'
 };
 
 // ─── Module instances ─────────────────────────────────────────────────────
@@ -58,6 +59,9 @@ const audioLevelContainer = $('audio-level-container');
 const audioLevelBar = $('audio-level-bar');
 const audioRmsValue = $('audio-rms-value');
 const audioStatusText = $('audio-status-text');
+const audioSourceSelect = $('audio-source-select');
+const liveTranscriptContainer = $('live-transcript-container');
+const liveTranscriptText = $('live-transcript-text');
 
 // ─── Load persisted settings ──────────────────────────────────────────────
 async function loadSettings() {
@@ -73,9 +77,15 @@ async function loadSettings() {
   if (settings.fontSize) teleprompter.setFontSize(settings.fontSize);
   if (settings.silenceMs) speech.setSilenceTimeout(settings.silenceMs);
 
-  // ── Apply gaze settings to the corrector ───────────────────────────────────────
-  // Force strong defaults for top-mounted camera. If old weak values were
-  // saved (gazeStrength < 80 or cameraOffsetY > -25), upgrade them silently.
+  // Restore audio source mode
+  if (settings.audioSource) {
+    state.audioSource = settings.audioSource;
+    speech.setAudioSource(state.audioSource);
+    if (audioSourceSelect) audioSourceSelect.value = state.audioSource;
+    updateAudioSourceUI(state.audioSource);
+  }
+
+  // Gaze defaults — strong for top-of-monitor camera
   const savedStrength = settings.gazeStrength;
   const savedOffset = settings.cameraOffsetY;
   const gazeStrength = (!savedStrength || savedStrength < 80) ? 88 : savedStrength;
@@ -83,9 +93,7 @@ async function loadSettings() {
   gaze.setCorrectionStrength(gazeStrength / 100);
   gaze.setCameraOffsetY(camOffsetY);
 
-  // Pass the API key to the speech module so Whisper can use it
   speech.setApiKey(state.apiKey);
-
   updateSpeedLabel();
 }
 
@@ -93,6 +101,35 @@ async function loadSettings() {
 function setStatus(text, type) {
   statusBadge.textContent = text;
   statusBadge.className = `badge badge-${type}`;
+}
+
+// ─── Audio source toggle ──────────────────────────────────────────────────
+
+/**
+ * Update the listen button label and the source-select styling to reflect
+ * the chosen capture mode so users always know what's being recorded.
+ */
+function updateAudioSourceUI(src) {
+  const labels = {
+    mic: '🎤 LISTEN',
+    system: '🖥️ LISTEN',
+    both: '🎙️+🖥️ LISTEN',
+  };
+  if (!state.isListening) {
+    btnListen.innerHTML = labels[src] || '🎤 LISTEN';
+  }
+
+  // Highlight the active option in the selector
+  if (audioSourceSelect) audioSourceSelect.value = src;
+}
+
+if (audioSourceSelect) {
+  audioSourceSelect.addEventListener('change', () => {
+    state.audioSource = audioSourceSelect.value;
+    speech.setAudioSource(state.audioSource);
+    updateAudioSourceUI(state.audioSource);
+    api.storeSet('audioSource', state.audioSource);
+  });
 }
 
 // ─── AI Interaction ───────────────────────────────────────────────────────
@@ -104,7 +141,6 @@ async function answerQuestion(question) {
 
   state.lastQuestion = question;
 
-  // Show in bottom AI panel
   aiPanel.classList.remove('hidden');
   aiQuestion.textContent = question;
   aiQuestion.classList.remove('hidden');
@@ -113,10 +149,7 @@ async function answerQuestion(question) {
   aiThinkingBadge.classList.remove('hidden');
   setStatus('THINKING', 'thinking');
 
-  // Create streaming target in the teleprompter text
   const streamEl = teleprompter.startStreamingAnswer(question);
-
-  // Build messages with conversation history
   const messages = aiService.buildMessages(question, state.systemPrompt);
 
   api.removeStreamListeners();
@@ -172,10 +205,12 @@ function startListening() {
   if (state.isListening) return;
   state.isListening = true;
 
+  const srcLabels = { mic: '🎤', system: '🖥️', both: '🎙️+🖥️' };
   btnListen.classList.add('active');
-  btnListen.innerHTML = '🔴 LISTENING…';
+  btnListen.innerHTML = `${srcLabels[state.audioSource] || '🔴'} LISTENING…`;
+
   aiPanel.classList.remove('hidden');
-  aiAnswer.textContent = '🎙 Listening — speak your question…';
+  aiAnswer.textContent = getListeningHint();
   aiQuestion.classList.add('hidden');
   aiListeningBadge.classList.remove('hidden');
   setStatus('LISTENING', 'listening');
@@ -186,17 +221,19 @@ function startListening() {
   audioStatusText.textContent = 'Waiting for sound…';
   audioStatusText.classList.remove('active');
 
-  // ── Always pass the current API key before starting ───────────────────
+  // Show live transcript area
+  liveTranscriptContainer.classList.remove('hidden');
+  liveTranscriptText.textContent = '';
+
   speech.setApiKey(state.apiKey);
+  speech.setAudioSource(state.audioSource);
 
   speech.start(
-    // interim: live progress messages
-    (transcript) => {
-      aiAnswer.textContent = transcript;
-    },
-    // final: transcript ready → send to GPT
+    // interim
+    (transcript) => { aiAnswer.textContent = transcript; },
+    // final
     async (finalTranscript) => {
-      stopListening(false); // don't re-stop speech module (already stopped)
+      stopListening(false);
       await answerQuestion(finalTranscript);
     },
     // error
@@ -204,22 +241,16 @@ function startListening() {
       stopListening(false);
       showNotification(`❌ ${err}`);
     },
-    // audio level: real-time mic level for the visualizer
+    // audio level
     (level, rms) => {
       audioLevelBar.style.width = `${level}%`;
       audioRmsValue.textContent = `RMS: ${rms.toFixed(1)}`;
 
-      // Color-code the bar
       audioLevelBar.classList.remove('level-low', 'level-mid', 'level-high');
-      if (level > 50) {
-        audioLevelBar.classList.add('level-high');
-      } else if (level > 15) {
-        audioLevelBar.classList.add('level-mid');
-      } else {
-        audioLevelBar.classList.add('level-low');
-      }
+      if (level > 50) audioLevelBar.classList.add('level-high');
+      else if (level > 15) audioLevelBar.classList.add('level-mid');
+      else audioLevelBar.classList.add('level-low');
 
-      // Update status text
       if (rms > 8) {
         audioStatusText.textContent = `✅ Sound detected! Level: ${level}%`;
         audioStatusText.classList.add('active');
@@ -229,18 +260,40 @@ function startListening() {
           : 'Waiting for sound…';
         audioStatusText.classList.remove('active');
       }
+    },
+    // live transcript (real-time word-by-word display)
+    (text, isInterim) => {
+      liveTranscriptText.textContent = text;
+      liveTranscriptText.classList.toggle('interim', isInterim);
+      // Auto-scroll the transcript area
+      liveTranscriptText.scrollTop = liveTranscriptText.scrollHeight;
     }
   );
+}
+
+/**
+ * Returns a contextual hint message shown in the AI panel while listening,
+ * so users know what audio source is active.
+ */
+function getListeningHint() {
+  switch (state.audioSource) {
+    case 'system':
+      return '🖥️ Listening to internal audio — speak in your meeting app…';
+    case 'both':
+      return '🎙️+🖥️ Capturing mic + internal audio (interviewer + you)…';
+    default:
+      return '🎤 Listening — speak your question…';
+  }
 }
 
 function stopListening(alsoStopSpeech = true) {
   if (!state.isListening) return;
   state.isListening = false;
   btnListen.classList.remove('active');
-  btnListen.innerHTML = '🎤 LISTEN';
+  updateAudioSourceUI(state.audioSource);
   aiListeningBadge.classList.add('hidden');
-  // Hide audio level indicator
   audioLevelContainer.classList.add('hidden');
+  liveTranscriptContainer.classList.add('hidden');
   if (alsoStopSpeech) speech.stop();
 }
 
@@ -256,11 +309,7 @@ async function toggleCameraPanel() {
     cameraPanel.classList.remove('hidden');
     btnCameraPreview.style.color = 'var(--accent)';
     try {
-      // Always (re)initialize if not running — this ensures a fresh start
-      // even if a previous silent init attempt failed.
-      if (!gaze.isRunning) {
-        await gaze.initCamera();
-      }
+      if (!gaze.isRunning) await gaze.initCamera();
       gaze.setCorrection(true);
       gazeToggle.checked = true;
     } catch (err) {
@@ -273,7 +322,6 @@ async function toggleCameraPanel() {
   } else {
     cameraPanel.classList.add('hidden');
     btnCameraPreview.style.color = '';
-    // Stop camera fully when panel closes so it can re-initialize cleanly next time
     gaze.stopCamera();
     gaze.setCorrection(false);
     gazeToggle.checked = false;
@@ -299,7 +347,6 @@ api.onGlobalToggleOpacity(() => {
 
 // ─── Keyboard Shortcuts ───────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  // Don't steal keys while editing the teleprompter text
   if ($('teleprompter-text').contentEditable === 'true' && !e.ctrlKey && !e.metaKey) return;
 
   const key = e.key.toLowerCase();
@@ -317,19 +364,11 @@ document.addEventListener('keydown', (e) => {
       teleprompter.toggleScroll();
       btnAutoscroll.classList.toggle('active', teleprompter.isScrolling);
       btnAutoscroll.textContent = teleprompter.isScrolling ? '⏸' : '▶';
-      setStatus(
-        teleprompter.isScrolling ? 'SCROLLING' : 'IDLE',
-        teleprompter.isScrolling ? 'scrolling' : 'idle'
-      );
+      setStatus(teleprompter.isScrolling ? 'SCROLLING' : 'IDLE',
+        teleprompter.isScrolling ? 'scrolling' : 'idle');
       break;
-    case 'ArrowUp':
-      e.preventDefault();
-      teleprompter.scrollBy(-80);
-      break;
-    case 'ArrowDown':
-      e.preventDefault();
-      teleprompter.scrollBy(80);
-      break;
+    case 'ArrowUp': e.preventDefault(); teleprompter.scrollBy(-80); break;
+    case 'ArrowDown': e.preventDefault(); teleprompter.scrollBy(80); break;
     case '+': case '=':
       e.preventDefault();
       teleprompter.changeSpeed(0.1);
@@ -342,24 +381,10 @@ document.addEventListener('keydown', (e) => {
       updateSpeedLabel();
       api.storeSet('scrollSpeed', teleprompter.speed);
       break;
-    case '[':
-      e.preventDefault();
-      teleprompter.changeFontSize(-2);
-      api.storeSet('fontSize', teleprompter.fontSize);
-      break;
-    case ']':
-      e.preventDefault();
-      teleprompter.changeFontSize(2);
-      api.storeSet('fontSize', teleprompter.fontSize);
-      break;
-    case 'l': case 'L':
-      e.preventDefault();
-      toggleListening();
-      break;
-    case 'Escape':
-      stopListening();
-      clearAI();
-      break;
+    case '[': e.preventDefault(); teleprompter.changeFontSize(-2); api.storeSet('fontSize', teleprompter.fontSize); break;
+    case ']': e.preventDefault(); teleprompter.changeFontSize(2); api.storeSet('fontSize', teleprompter.fontSize); break;
+    case 'l': case 'L': e.preventDefault(); toggleListening(); break;
+    case 'Escape': stopListening(); clearAI(); break;
     case '?':
       e.preventDefault();
       state.showHelp = !state.showHelp;
@@ -384,14 +409,10 @@ $('btn-scroll-up').addEventListener('click', () => teleprompter.scrollBy(-80));
 $('btn-scroll-down').addEventListener('click', () => teleprompter.scrollBy(80));
 
 $('btn-speed-up').addEventListener('click', () => {
-  teleprompter.changeSpeed(0.1);
-  updateSpeedLabel();
-  api.storeSet('scrollSpeed', teleprompter.speed);
+  teleprompter.changeSpeed(0.1); updateSpeedLabel(); api.storeSet('scrollSpeed', teleprompter.speed);
 });
 $('btn-speed-down').addEventListener('click', () => {
-  teleprompter.changeSpeed(-0.1);
-  updateSpeedLabel();
-  api.storeSet('scrollSpeed', teleprompter.speed);
+  teleprompter.changeSpeed(-0.1); updateSpeedLabel(); api.storeSet('scrollSpeed', teleprompter.speed);
 });
 
 $('btn-font-up').addEventListener('click', () => { teleprompter.changeFontSize(2); api.storeSet('fontSize', teleprompter.fontSize); });
@@ -419,13 +440,8 @@ $('btn-listen').addEventListener('click', toggleListening);
 $('btn-clear-ai').addEventListener('click', clearAI);
 $('btn-open-camera-browser').addEventListener('click', () => api.openCameraInBrowser());
 
-$('opacity-slider').addEventListener('input', (e) => {
-  api.setOpacity(e.target.value / 100);
-});
-
-gazeToggle.addEventListener('change', (e) => {
-  gaze.setCorrection(e.target.checked);
-});
+$('opacity-slider').addEventListener('input', (e) => api.setOpacity(e.target.value / 100));
+gazeToggle.addEventListener('change', (e) => gaze.setCorrection(e.target.checked));
 
 // ─── Helper ───────────────────────────────────────────────────────────────
 function updateSpeedLabel() {
@@ -435,7 +451,6 @@ function updateSpeedLabel() {
 // ─── Init ─────────────────────────────────────────────────────────────────
 loadSettings();
 setStatus('IDLE', 'idle');
-// Camera is started on-demand when user presses Ctrl+G or clicks 👁
 
 // ── Settings update from Settings window ──────────────────────────────────
 window.addEventListener('message', (event) => {
@@ -447,9 +462,8 @@ window.addEventListener('message', (event) => {
   state.systemPrompt = s.systemPrompt || state.systemPrompt;
 
   if (s.silenceMs) speech.setSilenceTimeout(s.silenceMs);
-  speech.setApiKey(state.apiKey); // keep speech module in sync
+  speech.setApiKey(state.apiKey);
 
-  // Apply updated gaze parameters immediately (no restart needed)
   if (s.gazeStrength !== undefined) gaze.setCorrectionStrength(s.gazeStrength / 100);
   if (s.cameraOffsetY !== undefined) gaze.setCameraOffsetY(s.cameraOffsetY);
 });
