@@ -463,8 +463,9 @@ export class SpeechCapture {
     const formData = new FormData();
     formData.append('file', blob, `audio.${ext}`);
     formData.append('model', 'whisper-1');
-    formData.append('language', 'en');
-    formData.append('prompt', 'This is an online interview. The user is asking or answering a question. Please transcribe accurately.');
+    formData.append('temperature', '0'); // Force deterministic output to prevent wrong letters
+    // Language is intentionally omitted so Whisper can auto-detect if the user is not speaking English
+    formData.append('prompt', 'This is a clear and accurate transcription. Please transcribe exactly what is said.');
 
     const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
