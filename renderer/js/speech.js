@@ -20,7 +20,7 @@ export class SpeechCapture {
     this._onAudioLevel = null;
     this._onLiveTranscript = null;  // real-time word display callback
 
-    this._silenceMs = 3000;
+    this._silenceMs = 600;
     this._audioContext = null;
     this._analyser = null;
     this._silenceCheckInt = null;
@@ -144,6 +144,10 @@ export class SpeechCapture {
     clearInterval(this._silenceCheckInt);
     this._silenceCheckInt = null;
 
+    clearInterval(this._whisperPollInt);
+    this._whisperPollInt = null;
+    this._isPollingWhisper = false;
+
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       try { this.mediaRecorder.stop(); } catch { }
     }
@@ -229,7 +233,8 @@ export class SpeechCapture {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
-            noiseSuppression: true,
+            noiseSuppression: false, // Turned off: Let Whisper handle noise
+            autoGainControl: false,  // Turned off: Prevents muffled volume pumping
             ...(deviceId ? { deviceId: { exact: deviceId } } : {})
           },
           video: false,
@@ -379,15 +384,49 @@ export class SpeechCapture {
         if (elapsed >= this._silenceMs) this._submit();
       }
     }, 150);
+
+    // ── Whisper Polling for Live Transcript ──
+    // Since WebKit SpeechRecognition is disabled in Electron, we poll Whisper API
+    // every 2 seconds to get pseudo-real-time transcripts.
+    this._whisperPollInt = setInterval(async () => {
+      if (!this.isListening || !this._hasSpeech || this.audioChunks.length === 0 || this._isPollingWhisper) return;
+      this._isPollingWhisper = true;
+      try {
+        const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+        const transcript = await this._whisperTranscribe([...this.audioChunks], mimeType);
+        if (this.isListening && transcript) {
+           this._liveTranscript = transcript.trim();
+           if (this._onLiveTranscript) this._onLiveTranscript(this._liveTranscript, true);
+
+           // Full sentence checker: if transcript ends with punctuation, assume it's a full sentence
+           if (/[.!?]$/.test(this._liveTranscript) && this._liveTranscript.length > 5) {
+             console.log('[Speech] Full sentence detected, submitting early.');
+             this._submit();
+           }
+        }
+      } catch (e) {
+        // Ignore polling errors to not interrupt the main flow
+      }
+      this._isPollingWhisper = false;
+    }, 1000);
   }
 
   // ── Whisper transcription ─────────────────────────────────────────────────
 
   async _submit() {
     if (this._submitting || !this.isListening) return;
-    if (this.audioChunks.length === 0) { this.stop(); return; }
 
     this._submitting = true;
+
+    // Flush remaining audio buffer to ensure the final word isn't chopped off
+    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+      try { this.mediaRecorder.requestData(); } catch(e) {}
+    }
+    // Wait briefly for the dataavailable event to append the last chunk
+    await new Promise(r => setTimeout(r, 60));
+
+    if (this.audioChunks.length === 0) { this.stop(); return; }
+
     const chunks = [...this.audioChunks];
     const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
     this.stop();
@@ -422,6 +461,7 @@ export class SpeechCapture {
     formData.append('file', blob, `audio.${ext}`);
     formData.append('model', 'whisper-1');
     formData.append('language', 'en');
+    formData.append('prompt', 'This is an online interview. The user is asking or answering a question. Please transcribe accurately.');
 
     const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

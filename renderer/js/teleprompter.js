@@ -85,12 +85,34 @@ export class Teleprompter {
     block.appendChild(qEl);
     block.appendChild(aEl);
     this.textEl.appendChild(block);
-    setTimeout(() => block.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     return aEl;
   }
 
   clearAIAnswers() {
     this.textEl.querySelectorAll('.ai-injected-block').forEach(b => b.remove());
     this._answerCount = 0;
+  }
+
+  updateLiveQuestion(text) {
+    if (!this._liveQuestionBlock) {
+      this._liveQuestionBlock = document.createElement('div');
+      this._liveQuestionBlock.className = 'ai-injected-block live-question-block';
+      this._liveQuestionBlock.innerHTML = `
+        <div class="ai-injected-separator">
+          <span class="ai-sep-icon">🎤</span><span class="ai-sep-label">You</span><span class="ai-sep-line"></span>
+        </div>
+        <div class="ai-injected-question" style="color: var(--accent-bright); font-style: normal; font-size: 1.1em;"></div>
+      `;
+      this.textEl.appendChild(this._liveQuestionBlock);
+    }
+    const qEl = this._liveQuestionBlock.querySelector('.ai-injected-question');
+    qEl.textContent = text;
+  }
+
+  clearLiveQuestion() {
+    if (this._liveQuestionBlock) {
+      this._liveQuestionBlock.remove();
+      this._liveQuestionBlock = null;
+    }
   }
 }

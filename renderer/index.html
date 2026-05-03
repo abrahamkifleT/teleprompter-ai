@@ -112,7 +112,10 @@
       </div>
 
       <!-- Live Transcript — shows your words in real-time as you speak -->
-      <div id="live-transcript-container" class="live-transcript-container hidden">
+      <div
+        id="live-transcript-container"
+        class="live-transcript-container hidden"
+      >
         <div class="live-transcript-header">
           <span class="live-pulse"></span>
           <span class="live-transcript-label">LIVE — You said:</span>
@@ -159,7 +162,7 @@
         autoplay
         playsinline
         muted
-        style="position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none;"
+        style="display: none"
       ></video>
       <canvas id="gaze-canvas" width="320" height="240"></canvas>
       <div class="camera-hint">

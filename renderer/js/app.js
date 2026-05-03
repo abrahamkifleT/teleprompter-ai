@@ -93,7 +93,9 @@ async function loadSettings() {
 
   if (settings.scrollSpeed) teleprompter.setSpeed(settings.scrollSpeed);
   if (settings.fontSize) teleprompter.setFontSize(settings.fontSize);
-  if (settings.silenceMs) speech.setSilenceTimeout(settings.silenceMs);
+  
+  const silenceMs = settings.silenceMs || 600;
+  speech.setSilenceTimeout(silenceMs);
 
   // Restore audio source mode
   if (settings.audioSource) {
@@ -167,6 +169,7 @@ async function answerQuestion(question) {
   aiThinkingBadge.classList.remove('hidden');
   setStatus('THINKING', 'thinking');
 
+  teleprompter.clearLiveQuestion();
   const streamEl = teleprompter.startStreamingAnswer(question);
   const messages = aiService.buildMessages(question, state.systemPrompt);
 
@@ -177,7 +180,9 @@ async function answerQuestion(question) {
     buffer += chunk;
     aiAnswer.textContent = buffer;
     aiAnswer.scrollTop = aiAnswer.scrollHeight;
-    if (streamEl) streamEl.textContent = buffer;
+    if (streamEl) {
+      streamEl.textContent = buffer;
+    }
   });
 
   api.onStreamDone((fullContent) => {
@@ -285,6 +290,9 @@ function startListening() {
       liveTranscriptText.classList.toggle('interim', isInterim);
       // Auto-scroll the transcript area
       liveTranscriptText.scrollTop = liveTranscriptText.scrollHeight;
+      
+      // Mirror the live text onto the teleprompter screen directly
+      if (text) teleprompter.updateLiveQuestion(text);
     }
   );
 }
