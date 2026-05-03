@@ -20,7 +20,8 @@ export class SpeechCapture {
     this._onAudioLevel = null;
     this._onLiveTranscript = null;  // real-time word display callback
 
-    this._silenceMs = 600;
+    this._silenceMs = 1500;   // default 1.5 s — balanced for interview use
+    this._sentenceEndMs = 400; // after punctuation detected, wait this long before firing
     this._audioContext = null;
     this._analyser = null;
     this._silenceCheckInt = null;
@@ -55,7 +56,8 @@ export class SpeechCapture {
   getAudioSource() { return this._audioSource; }
 
   setSilenceTimeout(ms) {
-    this._silenceMs = Math.max(1000, Math.min(15000, parseInt(ms) || 3000));
+    // Minimum 400 ms — fast enough for interview use without cutting off mid-word
+    this._silenceMs = Math.max(400, Math.min(15000, parseInt(ms) || 1500));
   }
 
   // ── Public lifecycle ──────────────────────────────────────────────────────
@@ -365,6 +367,14 @@ export class SpeechCapture {
     const bufLen = this._analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufLen);
     let silenceStart = null;
+    let sentenceEndDetected = false;   // true once punctuation seen in live transcript
+    let sentenceEndStart = null;       // timestamp when sentence-end punctuation first seen
+
+    // Helper: does the current live transcript look like a finished sentence?
+    const looksFinished = () => {
+      const t = (this._liveTranscript + this._liveInterimText).trim();
+      return t.length > 8 && /[.?!]\s*$/.test(t);
+    };
 
     this._silenceCheckInt = setInterval(() => {
       if (!this._analyser || !this.isListening) return;
@@ -375,22 +385,56 @@ export class SpeechCapture {
       if (this._onAudioLevel) this._onAudioLevel(level, rms);
 
       if (rms > 8) {
+        // Active speech — reset silence timer but keep sentence-end flag if punctuation seen
         if (!this._hasSpeech) console.log('[Speech] 🎤 Sound detected! RMS:', rms.toFixed(1));
         this._hasSpeech = true;
         silenceStart = null;
+        // Reset sentence-end gate when new speech resumes after punctuation
+        if (sentenceEndDetected) {
+          sentenceEndDetected = false;
+          sentenceEndStart = null;
+        }
         if (this._onInterim) this._onInterim('🎙 Hearing you…');
+
       } else if (this._hasSpeech) {
+        // ── Silence phase ──────────────────────────────────────────────────
         if (!silenceStart) silenceStart = Date.now();
-        const elapsed = Date.now() - silenceStart;
-        const remaining = Math.max(0, Math.ceil((this._silenceMs - elapsed) / 1000));
-        if (this._onInterim) this._onInterim(`🤫 Done speaking? Sending in ${remaining}s…`);
-        if (elapsed >= this._silenceMs) this._submit();
+        const silenceElapsed = Date.now() - silenceStart;
+
+        // Check if the live transcript ends with sentence-ending punctuation
+        if (!sentenceEndDetected && looksFinished()) {
+          sentenceEndDetected = true;
+          sentenceEndStart = Date.now();
+          console.log('[Speech] ✅ Sentence-end punctuation detected — fast-submitting in', this._sentenceEndMs, 'ms');
+        }
+
+        // Fast path: punctuation + short pause → submit quickly
+        if (sentenceEndDetected) {
+          const sentenceElapsed = Date.now() - sentenceEndStart;
+          if (sentenceElapsed >= this._sentenceEndMs) {
+            console.log('[Speech] ⚡ Sentence complete — submitting now');
+            this._submit();
+            return;
+          }
+          if (this._onInterim) this._onInterim('✅ Sentence complete — sending…');
+          return;
+        }
+
+        // Slow path: no punctuation → wait for full silence timeout
+        const remaining = Math.max(0, Math.ceil((this._silenceMs - silenceElapsed) / 1000));
+        if (this._onInterim) {
+          this._onInterim(remaining > 0
+            ? `🤫 Done speaking? Sending in ${remaining}s…`
+            : '⏳ Sending…'
+          );
+        }
+        if (silenceElapsed >= this._silenceMs) this._submit();
       }
-    }, 150);
+    }, 100);  // poll every 100 ms for snappier response
 
     // ── Whisper Polling for Live Transcript ──
-    // Since WebKit SpeechRecognition is disabled in Electron, we poll Whisper API
-    // every 2 seconds to get pseudo-real-time transcripts.
+    // Polls Whisper every 1.5 s to update the live transcript (used for
+    // sentence-boundary detection above as well as on-screen display).
     this._whisperPollInt = setInterval(async () => {
       if (!this.isListening || !this._hasSpeech || this.audioChunks.length === 0 || this._isPollingWhisper) return;
       this._isPollingWhisper = true;
@@ -400,18 +444,12 @@ export class SpeechCapture {
         if (this.isListening && transcript) {
            this._liveTranscript = transcript.trim();
            if (this._onLiveTranscript) this._onLiveTranscript(this._liveTranscript, true);
-
-           // Full sentence checker: if transcript ends with punctuation, assume it's a full sentence
-           if (/[.!?]$/.test(this._liveTranscript) && this._liveTranscript.length > 5) {
-             console.log('[Speech] Full sentence detected, submitting early.');
-             this._submit();
-           }
         }
       } catch (e) {
         // Ignore polling errors to not interrupt the main flow
       }
       this._isPollingWhisper = false;
-    }, 1000);
+    }, 1500);
   }
 
   // ── Whisper transcription ─────────────────────────────────────────────────
@@ -463,9 +501,21 @@ export class SpeechCapture {
     const formData = new FormData();
     formData.append('file', blob, `audio.${ext}`);
     formData.append('model', 'whisper-1');
-    formData.append('temperature', '0'); // Force deterministic output to prevent wrong letters
-    // Language is intentionally omitted so Whisper can auto-detect if the user is not speaking English
-    formData.append('prompt', 'This is a clear and accurate transcription. Please transcribe exactly what is said.');
+    formData.append('temperature', '0');  // deterministic — avoids hallucinations
+    // Explicit English forces Whisper into the right language model, which
+    // dramatically improves accuracy for non-native English accents because
+    // Whisper won't waste probability mass considering other languages.
+    formData.append('language', 'en');
+    // The prompt primes Whisper's vocabulary and speaking style so it recognises
+    // interview terminology and proper nouns correctly even with an accent.
+    // Whisper uses this as a prior — it doesn't have to be a literal transcript.
+    formData.append('prompt',
+      'Professional job interview. The speaker has a clear accent and is asking or answering ' +
+      'questions about their experience, skills, background, and career. ' +
+      'Common words: experience, background, team, project, leadership, management, ' +
+      'technology, development, strategy, responsible, collaborate, achieve, result, ' +
+      'challenge, solution, company, role, position, opportunity. ' +
+      'Transcribe every word exactly as spoken, including sentence-ending punctuation.');
 
     const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

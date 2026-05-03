@@ -304,11 +304,11 @@ function startListening() {
 function getListeningHint() {
   switch (state.audioSource) {
     case 'system':
-      return '🖥️ Listening to internal audio — speak in your meeting app…';
+      return '🖥️ Listening to internal audio — speak in your meeting app… (press Enter to send immediately)';
     case 'both':
-      return '🎙️+🖥️ Capturing mic + internal audio (interviewer + you)…';
+      return '🎤+🖥️ Capturing mic + internal audio (interviewer + you)… (press Enter to send immediately)';
     default:
-      return '🎤 Listening — speak your question…';
+      return '🎤 Listening — speak your question… (press Enter to send immediately)';
   }
 }
 
@@ -410,6 +410,13 @@ document.addEventListener('keydown', (e) => {
     case '[': e.preventDefault(); teleprompter.changeFontSize(-2); api.storeSet('fontSize', teleprompter.fontSize); break;
     case ']': e.preventDefault(); teleprompter.changeFontSize(2); api.storeSet('fontSize', teleprompter.fontSize); break;
     case 'l': case 'L': e.preventDefault(); toggleListening(); break;
+    case 'Enter':
+      // Force-submit immediately while listening — ideal for interview use
+      if (state.isListening) {
+        e.preventDefault();
+        speech.forceSubmit();
+      }
+      break;
     case 'Escape': stopListening(); clearAI(); break;
     case '?':
       e.preventDefault();
