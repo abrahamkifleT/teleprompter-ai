@@ -468,13 +468,12 @@ body {
 .control-bar {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px 5px;
   padding: 8px 10px;
   background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.2) 100%);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  flex-wrap: nowrap;
-  overflow: hidden;
+  flex-wrap: wrap;
 }
 
 .ctrl-group {
@@ -500,6 +499,7 @@ body {
   transition: all var(--transition);
   white-space: nowrap;
   font-family: var(--font-ui);
+  flex-shrink: 0;
 }
 .ctrl-btn:hover {
   background: var(--bg-hover);
@@ -537,7 +537,7 @@ body {
   animation: breathe 1.5s ease infinite;
 }
 
-.speed-group { min-width: 0; }
+.speed-group { flex-shrink: 0; }
 .speed-label {
   font-size: 11px;
   color: var(--text-dim);
