@@ -85,6 +85,22 @@ export class Teleprompter {
     block.appendChild(qEl);
     block.appendChild(aEl);
     this.textEl.appendChild(block);
+
+    // ── Scroll so the separator is at the very top of the visible area,
+    // then start auto-scrolling through the answer automatically.
+    // rAF ensures the DOM has painted and offsetTop is accurate.
+    requestAnimationFrame(() => {
+      // offsetTop is relative to textEl's scroll parent (the container)
+      const targetScrollTop = block.offsetTop - 16; // 16 px breathing room at top
+      this.container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' });
+
+      // Auto-start scrolling once the smooth jump settles (~600 ms)
+      clearTimeout(this._autoScrollTimer);
+      this._autoScrollTimer = setTimeout(() => {
+        if (!this.isScrolling) this.startScroll();
+      }, 650);
+    });
+
     return aEl;
   }
 

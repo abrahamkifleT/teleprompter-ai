@@ -191,6 +191,8 @@ async function answerQuestion(question) {
     aiThinkingBadge.classList.add('hidden');
     setStatus('READY', 'ready');
     aiService.addToHistory(question, fullContent);
+    // Keep speech module in sync so the next Whisper call gets conversation context
+    speech.setConversationHistory(aiService.conversationHistory);
   });
 
   api.onStreamError((err) => {

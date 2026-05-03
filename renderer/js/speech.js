@@ -39,6 +39,9 @@ export class SpeechCapture {
     this._liveRecognition = null;
     this._liveTranscript = '';      // accumulated live words
     this._liveInterimText = '';     // current interim (unfinished) phrase
+
+    // Conversation history — last N Q&A pairs used to prime Whisper context
+    this._conversationHistory = [];
   }
 
   // ── Configuration ─────────────────────────────────────────────────────────
@@ -54,6 +57,15 @@ export class SpeechCapture {
   }
 
   getAudioSource() { return this._audioSource; }
+
+  /**
+   * Feed the AI conversation history so Whisper can use past Q&A as context.
+   * Pass the same array that AIService keeps ({role, content}[]).
+   * @param {Array<{role:string, content:string}>} history
+   */
+  setConversationHistory(history) {
+    this._conversationHistory = Array.isArray(history) ? history : [];
+  }
 
   setSilenceTimeout(ms) {
     // Minimum 400 ms — fast enough for interview use without cutting off mid-word
@@ -506,16 +518,33 @@ export class SpeechCapture {
     // dramatically improves accuracy for non-native English accents because
     // Whisper won't waste probability mass considering other languages.
     formData.append('language', 'en');
-    // The prompt primes Whisper's vocabulary and speaking style so it recognises
-    // interview terminology and proper nouns correctly even with an accent.
-    // Whisper uses this as a prior — it doesn't have to be a literal transcript.
-    formData.append('prompt',
+
+    // ── Build a context-rich prompt ─────────────────────────────────────────
+    // Whisper uses the prompt as a vocabulary/style prior. Including the last
+    // few exchanges lets it recognise words already spoken in this session
+    // and fix accent-related misrecognitions by seeing how those words were
+    // spelled earlier. The prompt is capped at ~900 chars (Whisper limit ~224 tokens).
+    const historyLines = [];
+    const recent = this._conversationHistory.slice(-6); // last 3 Q&A pairs
+    for (const msg of recent) {
+      if (msg.role === 'user')      historyLines.push(`Q: ${msg.content}`);
+      else if (msg.role === 'assistant') historyLines.push(`A: ${msg.content}`);
+    }
+    const historySnippet = historyLines.join(' ').slice(0, 600);
+
+    const basePrompt =
       'Professional job interview. The speaker has a clear accent and is asking or answering ' +
       'questions about their experience, skills, background, and career. ' +
       'Common words: experience, background, team, project, leadership, management, ' +
       'technology, development, strategy, responsible, collaborate, achieve, result, ' +
       'challenge, solution, company, role, position, opportunity. ' +
-      'Transcribe every word exactly as spoken, including sentence-ending punctuation.');
+      'Transcribe every word exactly as spoken, including sentence-ending punctuation.';
+
+    const fullPrompt = historySnippet
+      ? `${basePrompt} Recent conversation context: ${historySnippet}`
+      : basePrompt;
+
+    formData.append('prompt', fullPrompt.slice(0, 900));
 
     const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
