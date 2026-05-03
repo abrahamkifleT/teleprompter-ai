@@ -42,6 +42,8 @@ export class SpeechCapture {
 
     // Conversation history — last N Q&A pairs used to prime Whisper context
     this._conversationHistory = [];
+    // Key terms from knowledge base — injected into Whisper prompt as vocab hints
+    this._keyTerms = '';
   }
 
   // ── Configuration ─────────────────────────────────────────────────────────
@@ -65,6 +67,15 @@ export class SpeechCapture {
    */
   setConversationHistory(history) {
     this._conversationHistory = Array.isArray(history) ? history : [];
+  }
+
+  /**
+   * Set key terms/proper nouns from the knowledge base.
+   * These are injected into the Whisper prompt as vocabulary hints.
+   * @param {string} terms  Comma-separated string of proper nouns & technologies
+   */
+  setKeyTerms(terms) {
+    this._keyTerms = (terms || '').trim();
   }
 
   setSilenceTimeout(ms) {
@@ -540,9 +551,14 @@ export class SpeechCapture {
       'challenge, solution, company, role, position, opportunity. ' +
       'Transcribe every word exactly as spoken, including sentence-ending punctuation.';
 
+    // Append key terms from knowledge base so Whisper knows how to spell them
+    const keyTermsClause = this._keyTerms
+      ? ` Key proper nouns and technologies in this conversation: ${this._keyTerms}.`
+      : '';
+
     const fullPrompt = historySnippet
-      ? `${basePrompt} Recent conversation context: ${historySnippet}`
-      : basePrompt;
+      ? `${basePrompt}${keyTermsClause} Recent conversation context: ${historySnippet}`
+      : `${basePrompt}${keyTermsClause}`;
 
     formData.append('prompt', fullPrompt.slice(0, 900));
 

@@ -40,7 +40,35 @@ Speak in first person. Avoid bullet points — use flowing sentences that are ea
 Be direct and sound knowledgeable.`,
   lastQuestion: '',
   audioSource: 'mic', // 'mic' | 'system' | 'both'
+  // Knowledge base
+  cvSummary: '',
+  jobDescription: '',
+  companyInfo: '',
+  keyTerms: '',
 };
+
+/**
+ * Builds the effective system prompt by appending the knowledge base to the
+ * base prompt. Called every time settings change or on startup.
+ */
+function buildEffectiveSystemPrompt() {
+  const parts = [state.systemPrompt];
+
+  if (state.cvSummary) {
+    parts.push(`\n\n--- CANDIDATE BACKGROUND (use this as the source of truth — do NOT invent facts) ---\n${state.cvSummary}`);
+  }
+  if (state.jobDescription) {
+    parts.push(`\n\n--- JOB DESCRIPTION (tailor every answer to these requirements) ---\n${state.jobDescription}`);
+  }
+  if (state.companyInfo) {
+    parts.push(`\n\n--- COMPANY & ROLE CONTEXT ---\n${state.companyInfo}`);
+  }
+  if (state.cvSummary || state.jobDescription) {
+    parts.push(`\n\nIMPORTANT: Only state facts about the candidate that are explicitly mentioned in the CANDIDATE BACKGROUND above. Never invent experience, numbers, or achievements. If something is not mentioned, say you can elaborate or redirect to what IS mentioned.`);
+  }
+
+  return parts.join('');
+}
 
 // ─── Module instances ─────────────────────────────────────────────────────
 const teleprompter = new Teleprompter(
@@ -88,13 +116,19 @@ async function loadSettings() {
   state.model = settings.model || 'gpt-4o';
   state.systemPrompt = settings.systemPrompt || state.systemPrompt;
 
+  // Knowledge base
+  state.cvSummary     = settings.cvSummary     || '';
+  state.jobDescription= settings.jobDescription|| '';
+  state.companyInfo   = settings.companyInfo   || '';
+  state.keyTerms      = settings.keyTerms      || '';
+
   const savedScript = settings.script;
   if (savedScript) $('teleprompter-text').innerHTML = savedScript;
 
   if (settings.scrollSpeed) teleprompter.setSpeed(settings.scrollSpeed);
   if (settings.fontSize) teleprompter.setFontSize(settings.fontSize);
-  
-  const silenceMs = settings.silenceMs || 600;
+
+  const silenceMs = settings.silenceMs || 1500;
   speech.setSilenceTimeout(silenceMs);
 
   // Restore audio source mode
@@ -114,6 +148,8 @@ async function loadSettings() {
   gaze.setCameraOffsetY(camOffsetY);
 
   speech.setApiKey(state.apiKey);
+  // Pass key terms to Whisper for better recognition of your vocabulary
+  speech.setKeyTerms(state.keyTerms);
   updateSpeedLabel();
 }
 
@@ -171,7 +207,7 @@ async function answerQuestion(question) {
 
   teleprompter.clearLiveQuestion();
   const streamEl = teleprompter.startStreamingAnswer(question);
-  const messages = aiService.buildMessages(question, state.systemPrompt);
+  const messages = aiService.buildMessages(question, buildEffectiveSystemPrompt());
 
   api.removeStreamListeners();
 
@@ -492,13 +528,22 @@ window.addEventListener('message', (event) => {
   if (event.data?.type !== 'settings-saved') return;
   const s = event.data.settings;
 
-  state.apiKey = s.apiKey || state.apiKey;
-  state.model = s.model || state.model;
+  state.apiKey       = s.apiKey       || state.apiKey;
+  state.model        = s.model        || state.model;
   state.systemPrompt = s.systemPrompt || state.systemPrompt;
+
+  // Knowledge base update
+  if (s.cvSummary      !== undefined) state.cvSummary      = s.cvSummary;
+  if (s.jobDescription !== undefined) state.jobDescription = s.jobDescription;
+  if (s.companyInfo    !== undefined) state.companyInfo    = s.companyInfo;
+  if (s.keyTerms       !== undefined) {
+    state.keyTerms = s.keyTerms;
+    speech.setKeyTerms(state.keyTerms);
+  }
 
   if (s.silenceMs) speech.setSilenceTimeout(s.silenceMs);
   speech.setApiKey(state.apiKey);
 
-  if (s.gazeStrength !== undefined) gaze.setCorrectionStrength(s.gazeStrength / 100);
+  if (s.gazeStrength  !== undefined) gaze.setCorrectionStrength(s.gazeStrength / 100);
   if (s.cameraOffsetY !== undefined) gaze.setCameraOffsetY(s.cameraOffsetY);
 });

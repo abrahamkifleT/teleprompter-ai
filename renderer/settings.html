@@ -195,7 +195,43 @@
     </div>
   </div>
 
-  <!-- Teleprompter -->
+  <!-- ░░ KNOWLEDGE BASE ░░ -->
+  <div class="section">
+    <div class="section-title">📋 Interview Knowledge Base</div>
+    <div class="field-hint" style="margin-bottom:4px; line-height:1.6;">
+      Fill in your real background so the AI answers with <strong>your</strong> facts — no hallucination.
+      Key terms are also fed to the speech engine so it recognises your vocabulary.
+    </div>
+
+    <div class="field">
+      <label>Your CV / Background Summary</label>
+      <textarea id="cvSummary" rows="5"
+        placeholder="e.g. I have 5 years of experience as a software engineer at Acme Corp, leading a team of 8. I built a microservices platform using Node.js, Kubernetes, and AWS that reduced deployment time by 60%. My strengths are system design, team leadership, and Python..."></textarea>
+      <div class="field-hint">Paste a short paragraph about your experience, achievements, and strengths. The AI will use this as the source of truth for all answers about you.</div>
+    </div>
+
+    <div class="field">
+      <label>Job Description (role you are applying for)</label>
+      <textarea id="jobDescription" rows="4"
+        placeholder="e.g. Senior Software Engineer at TechCorp. Responsibilities: design scalable backend systems, mentor junior engineers, drive architecture decisions. Requirements: 5+ years Python/Go, cloud experience, strong communication skills..."></textarea>
+      <div class="field-hint">Paste the key points of the job description so the AI tailors answers to what the interviewer cares about.</div>
+    </div>
+
+    <div class="field">
+      <label>Company &amp; Role Context</label>
+      <textarea id="companyInfo" rows="3"
+        placeholder="e.g. TechCorp is a Series B fintech startup (300 employees) focused on payment infrastructure. The role is fully remote. The interviewer is the VP of Engineering..."></textarea>
+      <div class="field-hint">Company name, size, industry, interview stage, and any other context that helps the AI give relevant answers.</div>
+    </div>
+
+    <div class="field">
+      <label>Key Terms &amp; Technologies <span style="color:var(--accent);font-size:10px;">→ also improves speech recognition</span></label>
+      <input type="text" id="keyTerms"
+        placeholder="e.g. Kubernetes, gRPC, Apache Kafka, React, PostgreSQL, CI/CD, TechCorp, Acme Corp" />
+      <div class="field-hint">Comma-separated list of proper nouns, company names, and technologies you'll mention. These are injected into the speech recogniser so it won't mishear them.</div>
+    </div>
+  </div>
+
   <div class="section">
     <div class="section-title">Teleprompter</div>
 
@@ -311,6 +347,11 @@
     if (s.gazeStrength)  { $('gazeStrength').value = s.gazeStrength; $('gazeStrengthVal').textContent = s.gazeStrength + '%'; }
     if (s.cameraOffsetY) { $('cameraOffsetY').value = s.cameraOffsetY; $('cameraOffsetYVal').textContent = s.cameraOffsetY + '%'; }
     if (s.silenceMs)     { $('silenceMs').value = s.silenceMs; $('silenceMsVal').textContent = (s.silenceMs / 1000).toFixed(1) + 's'; }
+    // Knowledge base
+    if (s.cvSummary)     $('cvSummary').value     = s.cvSummary;
+    if (s.jobDescription)$('jobDescription').value = s.jobDescription;
+    if (s.companyInfo)   $('companyInfo').value   = s.companyInfo;
+    if (s.keyTerms)      $('keyTerms').value      = s.keyTerms;
   }
 
   $('btn-save').addEventListener('click', async () => {
@@ -323,10 +364,20 @@
       gazeStrength:  parseInt($('gazeStrength').value),
       cameraOffsetY: parseInt($('cameraOffsetY').value),
       silenceMs:     parseInt($('silenceMs').value),
+      // Knowledge base
+      cvSummary:     $('cvSummary').value.trim(),
+      jobDescription:$('jobDescription').value.trim(),
+      companyInfo:   $('companyInfo').value.trim(),
+      keyTerms:      $('keyTerms').value.trim(),
     };
 
     for (const [key, val] of Object.entries(settings)) {
       await api.storeSet(key, val);
+    }
+
+    // Notify the main window immediately so AI + speech update without restart
+    if (window.opener) {
+      window.opener.postMessage({ type: 'settings-saved', settings }, '*');
     }
 
     const msg = $('status-msg');
