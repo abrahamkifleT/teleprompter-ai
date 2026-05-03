@@ -102,7 +102,10 @@ export class SpeechCapture {
       console.log('[Speech] MIME type:', mimeType || '(browser default)');
       this.mediaRecorder = new MediaRecorder(
         recordingStream,
-        mimeType ? { mimeType } : {}
+        {
+          ...(mimeType ? { mimeType } : {}),
+          audioBitsPerSecond: 128000
+        }
       );
 
       this.mediaRecorder.ondataavailable = (e) => {
@@ -233,8 +236,8 @@ export class SpeechCapture {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
-            noiseSuppression: false, // Turned off: Let Whisper handle noise
-            autoGainControl: false,  // Turned off: Prevents muffled volume pumping
+            noiseSuppression: true, // Re-enabled to filter out background static
+            autoGainControl: true,  // Re-enabled to normalize mic volume
             ...(deviceId ? { deviceId: { exact: deviceId } } : {})
           },
           video: false,

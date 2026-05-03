@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell, dialog, Tray, Menu, nativeImage, session } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, shell, dialog, Tray, Menu, nativeImage, session, desktopCapturer } = require('electron');
 const path = require('path');
 const http = require('http');
 const { OpenAI } = require('openai');
@@ -7,7 +7,6 @@ const { OpenAI } = require('openai');
 // These MUST be set before app.whenReady(). They fix getUserMedia() on file://
 // protocol which Chromium otherwise treats as an insecure origin.
 app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
-app.commandLine.appendSwitch('use-fake-ui-for-media-stream');       // auto-grant mic/camera without prompts
 app.commandLine.appendSwitch('allow-file-access-from-files');        // allow file:// to access media APIs
 app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'file://');  // treat file:// as secure context
 
@@ -342,6 +341,19 @@ app.whenReady().then(() => {
   session.defaultSession.setDevicePermissionHandler((details) => {
     console.log('[DevicePermission] Requested:', details.deviceType, '→ GRANTED');
     return true;
+  });
+
+  // ── Handle getDisplayMedia() for System Audio Capture ───────────────────
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+      // Return the first screen. The critical part is audio: 'loopback'
+      // which allows Electron to capture system audio on Windows.
+      callback({ video: sources[0], audio: 'loopback' });
+    }).catch(err => {
+      console.error('[DisplayMedia] Error getting sources:', err);
+      // fallback
+      callback({ video: null, audio: null });
+    });
   });
 
   createMainWindow();
