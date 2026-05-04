@@ -23,59 +23,52 @@ let isWindowHidden = false;
 let conversationHistory = [];
 const MAX_HISTORY = 10; // keep last 10 Q&A pairs
 
-const { WebSocketServer } = require('ws');
-
-// ─── WebSocket Virtual Camera Server ─────────────────────────────────────────
-// Serves gaze-corrected webcam frames on ws://localhost:8765
-// Use OBS Browser Source → http://localhost:8765 → Start Virtual Camera to route into Zoom/Meet
+// ─── MJPEG Virtual Camera Server ────────────────────────────────────────────
+// Serves gaze-corrected webcam frames on http://localhost:8765
+// Use OBS Browser Source → Start Virtual Camera to route into Zoom/Meet
 const streamServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/html' });
-  res.end(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>OBS Receiver</title>
-        <style>
-          body { margin: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; }
-          canvas { width: 100%; height: 100%; object-fit: contain; }
-        </style>
-      </head>
-      <body>
-        <canvas id="feed" width="480" height="360"></canvas>
-        <script>
-          const canvas = document.getElementById('feed');
-          const ctx = canvas.getContext('2d', { alpha: false });
-          const ws = new WebSocket('ws://' + location.host);
-          
-          ws.onmessage = (event) => {
-            const img = new Image();
-            img.onload = () => {
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            };
-            img.src = 'data:image/webp;base64,' + event.data;
-          };
-          ws.onclose = () => { setTimeout(() => location.reload(), 1000); };
-        </script>
-      </body>
-    </html>
-  `);
+  if (req.url !== '/stream') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`
+      <html><body style="margin:0;background:#000">
+        <img src="/stream" style="width:100%;height:100vh;object-fit:cover">
+      </body></html>
+    `);
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+
+  mjpegClients.add(res);
+
+  req.on('close', () => {
+    mjpegClients.delete(res);
+  });
 });
 
-const wss = new WebSocketServer({ server: streamServer });
-
-function broadcastFrame(base64Data) {
-  wss.clients.forEach((client) => {
-    if (client.readyState === 1) { // WebSocket.OPEN
-      // CRITICAL FIX: If OBS falls behind, drop the frame instead of queueing it.
-      // This guarantees zero latency buildup.
-      if (client.bufferedAmount > 200000) return;
-      client.send(base64Data);
+function broadcastFrame(jpegBuffer) {
+  const boundary = '--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + jpegBuffer.length + '\r\n\r\n';
+  for (const client of mjpegClients) {
+    try {
+      // THE FIX: If the TCP socket is full, drop the frame to guarantee 0 latency!
+      if (client.writableNeedDrain) continue;
+      
+      client.write(boundary);
+      client.write(jpegBuffer);
+      client.write('\r\n');
+    } catch (e) {
+      mjpegClients.delete(client);
     }
-  });
+  }
 }
 
 streamServer.listen(8765, '127.0.0.1', () => {
-  console.log('📹 WebSocket camera server: http://localhost:8765');
+  console.log('📹 MJPEG camera server: http://localhost:8765/stream');
 });
 
 // ─── Window Creation ─────────────────────────────────────────────────────────
@@ -280,11 +273,12 @@ ipcMain.handle('history:clear', () => {
   return { success: true };
 });
 
-// Receive gaze-corrected frames from renderer and broadcast via WebSocket
+// Receive gaze-corrected frames from renderer and broadcast via MJPEG
 ipcMain.on('camera:frame', (event, frameData) => {
-  // frameData is a base64 string
-  latestFrameBuffer = frameData;
-  broadcastFrame(frameData);
+  // frameData is a base64 string. Convert to raw JPEG buffer for MJPEG.
+  const buffer = Buffer.from(frameData, 'base64');
+  latestFrameBuffer = buffer;
+  broadcastFrame(buffer);
 });
 
 ipcMain.handle('window:minimize', () => mainWindow?.minimize());

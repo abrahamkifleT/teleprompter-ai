@@ -349,18 +349,15 @@ export class GazeCorrector {
     const fc = this.frameCanvas;
     const fCtx = this.frameCtx;
 
-    // Force lower resolution for the broadcast to massively reduce lag
-    if (fc.width !== 480) {
-      fc.width = 480;
-      fc.height = 360;
+    if (fc.width !== 640) {
+      fc.width = 640;
+      fc.height = 480;
     }
 
     fCtx.drawImage(this.outputCanvas, 0, 0, fc.width, fc.height);
 
-    // toBlob is asynchronous and creates massive queue lag when running at 30fps.
-    // toDataURL with WebP is drastically faster than JPEG in Chromium,
-    // solving the root cause of the encoding lag.
-    const dataUrl = fc.toDataURL('image/webp', 0.50);
+    // MJPEG requires actual JPEG frames.
+    const dataUrl = fc.toDataURL('image/jpeg', 0.65);
     const base64Data = dataUrl.split(',')[1];
     
     window.electronAPI.sendCameraFrame(base64Data);
