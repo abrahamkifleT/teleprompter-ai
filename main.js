@@ -91,6 +91,7 @@ function createMainWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       webSecurity: false, // needed for MediaPipe CDN + webcam
+      backgroundThrottling: false, // KEEP CAMERA STREAM ACTIVE WHEN WINDOW IS HIDDEN
     },
   });
 
