@@ -37,16 +37,22 @@ const streamServer = http.createServer((req, res) => {
         <title>OBS Receiver</title>
         <style>
           body { margin: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; }
-          img { width: 100%; height: 100%; object-fit: contain; }
+          canvas { width: 100%; height: 100%; object-fit: contain; }
         </style>
       </head>
       <body>
-        <img id="feed" src="" />
+        <canvas id="feed" width="480" height="360"></canvas>
         <script>
-          const img = document.getElementById('feed');
+          const canvas = document.getElementById('feed');
+          const ctx = canvas.getContext('2d', { alpha: false });
           const ws = new WebSocket('ws://' + location.host);
+          
           ws.onmessage = (event) => {
-            img.src = 'data:image/jpeg;base64,' + event.data;
+            const img = new Image();
+            img.onload = () => {
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            img.src = 'data:image/webp;base64,' + event.data;
           };
           ws.onclose = () => { setTimeout(() => location.reload(), 1000); };
         </script>
@@ -60,6 +66,9 @@ const wss = new WebSocketServer({ server: streamServer });
 function broadcastFrame(base64Data) {
   wss.clients.forEach((client) => {
     if (client.readyState === 1) { // WebSocket.OPEN
+      // CRITICAL FIX: If OBS falls behind, drop the frame instead of queueing it.
+      // This guarantees zero latency buildup.
+      if (client.bufferedAmount > 200000) return;
       client.send(base64Data);
     }
   });

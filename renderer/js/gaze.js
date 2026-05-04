@@ -358,8 +358,9 @@ export class GazeCorrector {
     fCtx.drawImage(this.outputCanvas, 0, 0, fc.width, fc.height);
 
     // toBlob is asynchronous and creates massive queue lag when running at 30fps.
-    // toDataURL is synchronous and base64 strings transfer over IPC very quickly.
-    const dataUrl = fc.toDataURL('image/jpeg', 0.60);
+    // toDataURL with WebP is drastically faster than JPEG in Chromium,
+    // solving the root cause of the encoding lag.
+    const dataUrl = fc.toDataURL('image/webp', 0.50);
     const base64Data = dataUrl.split(',')[1];
     
     window.electronAPI.sendCameraFrame(base64Data);
