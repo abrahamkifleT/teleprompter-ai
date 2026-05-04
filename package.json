@@ -11,7 +11,8 @@
     "build:linux": "electron-builder --linux"
   },
   "dependencies": {
-    "openai": "^4.47.1"
+    "openai": "^4.47.1",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "electron": "^30.0.0",
@@ -20,7 +21,10 @@
   "build": {
     "appId": "com.ai.teleprompter",
     "productName": "AI Teleprompter",
-    "files": ["**/*", "!node_modules/**"],
+    "files": [
+      "**/*",
+      "!node_modules/**"
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
@@ -28,7 +32,14 @@
       "entitlementsInherit": "entitlements.plist"
     },
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "linux": {
       "target": "AppImage",

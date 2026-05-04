@@ -23,49 +23,50 @@ let isWindowHidden = false;
 let conversationHistory = [];
 const MAX_HISTORY = 10; // keep last 10 Q&A pairs
 
-// ─── MJPEG Virtual Camera Server ────────────────────────────────────────────
-// Serves gaze-corrected webcam frames on http://localhost:8765
-// Use OBS Browser Source → Start Virtual Camera to route into Zoom/Meet
-const mjpegServer = http.createServer((req, res) => {
-  if (req.url !== '/stream') {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(`
-      <html><body style="margin:0;background:#000">
-        <img src="/stream" style="width:100%;height:100vh;object-fit:cover">
-      </body></html>
-    `);
-    return;
-  }
+const { WebSocketServer } = require('ws');
 
-  res.writeHead(200, {
-    'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-  });
-
-  mjpegClients.add(res);
-
-  req.on('close', () => {
-    mjpegClients.delete(res);
-  });
+// ─── WebSocket Virtual Camera Server ─────────────────────────────────────────
+// Serves gaze-corrected webcam frames on ws://localhost:8765
+// Use OBS Browser Source → http://localhost:8765 → Start Virtual Camera to route into Zoom/Meet
+const streamServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>OBS Receiver</title>
+        <style>
+          body { margin: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; }
+          img { width: 100%; height: 100%; object-fit: contain; }
+        </style>
+      </head>
+      <body>
+        <img id="feed" src="" />
+        <script>
+          const img = document.getElementById('feed');
+          const ws = new WebSocket('ws://' + location.host);
+          ws.onmessage = (event) => {
+            img.src = 'data:image/jpeg;base64,' + event.data;
+          };
+          ws.onclose = () => { setTimeout(() => location.reload(), 1000); };
+        </script>
+      </body>
+    </html>
+  `);
 });
 
-function broadcastFrame(jpegBuffer) {
-  const boundary = '--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' + jpegBuffer.length + '\r\n\r\n';
-  for (const client of mjpegClients) {
-    try {
-      client.write(boundary);
-      client.write(jpegBuffer);
-      client.write('\r\n');
-    } catch (e) {
-      mjpegClients.delete(client);
+const wss = new WebSocketServer({ server: streamServer });
+
+function broadcastFrame(base64Data) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(base64Data);
     }
-  }
+  });
 }
 
-mjpegServer.listen(8765, '127.0.0.1', () => {
-  console.log('📹 MJPEG camera server: http://localhost:8765/stream');
+streamServer.listen(8765, '127.0.0.1', () => {
+  console.log('📹 WebSocket camera server: http://localhost:8765');
 });
 
 // ─── Window Creation ─────────────────────────────────────────────────────────
@@ -270,14 +271,11 @@ ipcMain.handle('history:clear', () => {
   return { success: true };
 });
 
-// Receive gaze-corrected frames from renderer and broadcast via MJPEG
+// Receive gaze-corrected frames from renderer and broadcast via WebSocket
 ipcMain.on('camera:frame', (event, frameData) => {
-  // If it's a string, decode base64. Otherwise treat as raw buffer.
-  const buffer = typeof frameData === 'string'
-    ? Buffer.from(frameData, 'base64')
-    : Buffer.from(frameData);
-  latestFrameBuffer = buffer;
-  broadcastFrame(buffer);
+  // frameData is a base64 string
+  latestFrameBuffer = frameData;
+  broadcastFrame(frameData);
 });
 
 ipcMain.handle('window:minimize', () => mainWindow?.minimize());
@@ -375,6 +373,6 @@ app.on('will-quit', () => {
 });
 
 app.on('window-all-closed', () => {
-  mjpegServer.close();
+  streamServer.close();
   if (process.platform !== 'darwin') app.quit();
 });
