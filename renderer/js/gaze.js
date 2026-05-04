@@ -169,9 +169,9 @@ export class GazeCorrector {
       this._applyGazeCorrection(ctx, results.multiFaceLandmarks[0], w, h);
     }
 
-    // Throttle MJPEG broadcast to ~15 fps to keep IPC light
+    // Broadcast every frame to ensure smooth video (typically 30 fps)
     this.frameCount++;
-    if (this.frameCount % 2 === 0) this._broadcastFrame();
+    this._broadcastFrame();
   }
 
   // ── Core correction pipeline (same algorithm as eyealign_upload.html) ─────
@@ -348,17 +348,21 @@ export class GazeCorrector {
     if (!window.electronAPI) return;
     const fc = this.frameCanvas;
     const fCtx = this.frameCtx;
+
+    // Force lower resolution for the broadcast to massively reduce lag
+    if (fc.width !== 480) {
+      fc.width = 480;
+      fc.height = 360;
+    }
+
     fCtx.drawImage(this.outputCanvas, 0, 0, fc.width, fc.height);
-    fc.toBlob(
-      (blob) => {
-        if (!blob) return;
-        blob.arrayBuffer().then((buf) => {
-          window.electronAPI.sendCameraFrame(buf);
-        });
-      },
-      'image/jpeg',
-      0.82
-    );
+
+    // toBlob is asynchronous and creates massive queue lag when running at 30fps.
+    // toDataURL is synchronous and base64 strings transfer over IPC very quickly.
+    const dataUrl = fc.toDataURL('image/jpeg', 0.60);
+    const base64Data = dataUrl.split(',')[1];
+    
+    window.electronAPI.sendCameraFrame(base64Data);
   }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────

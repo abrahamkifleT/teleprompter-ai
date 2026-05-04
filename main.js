@@ -271,9 +271,13 @@ ipcMain.handle('history:clear', () => {
 });
 
 // Receive gaze-corrected frames from renderer and broadcast via MJPEG
-ipcMain.on('camera:frame', (event, jpegBuffer) => {
-  latestFrameBuffer = jpegBuffer;
-  broadcastFrame(Buffer.from(jpegBuffer));
+ipcMain.on('camera:frame', (event, frameData) => {
+  // If it's a string, decode base64. Otherwise treat as raw buffer.
+  const buffer = typeof frameData === 'string'
+    ? Buffer.from(frameData, 'base64')
+    : Buffer.from(frameData);
+  latestFrameBuffer = buffer;
+  broadcastFrame(buffer);
 });
 
 ipcMain.handle('window:minimize', () => mainWindow?.minimize());
